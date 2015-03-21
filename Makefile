@@ -72,54 +72,59 @@ text: $(TARGET).hex
 # The code below takes an existing firmware (for the Ultimaker2) and attaches the SD card bootloader to it
 # This requires some swapping and insertion of jump instructions, which is performed with disassembled code
 # There are some weird code here, mainly because makefiles can't do math and makefiles have stupid rules about parenthesis
+# This implementation only works on MCUs that support JMP instructions
 
-UM2FW ?= MarlinUltimaker2-15.02.1
+UM2FW  ?= MarlinUltimaker2-15.02.1
+BOOTFW ?= $(TARGET)
 BOOT_ADR_HEX = $(strip $(subst 0x,,$(BOOT_ADR)))
 TRAMPOLINE_ADR = $(shell echo "$(BOOT_ADR)" | gawk --non-decimal-data '{ printf "0x%X\n", $$1 - 4 }')
-RESET_FIND_JMP = sed -n -r "N;s/^\.org\s+0x[0]+\s+jmp\s+0x([0-9a-fA-F]+).*?$$/0x\U\1/p"
-RESET_FIND_RJMP = sed -n -r "N;s/^\.org\s+0x[0]+\s+rjmp\s+\.\+([0-9]+).*?$$/\1/p"
+RESET_FIND_JMP  = sed -n -r "s/^\s*?[0]+:\s+jmp\s+0x([0-9a-fA-F]+).*?$$/0x\U\1/p"
+RESET_FIND_RJMP = sed -n -r "s/^\s*?[0]+:\s+rjmp\s+\.\+([0-9]+).*?$$/\1/p"
 
 cleanmerged:
-	rm -rf $(UM2FW)-cardboot.hex merged_post.hex merged_post.elf merged_post.asm merged_pre.asm merged_pre.hex
+	rm -rf $(UM2FW)-cardboot.hex $(UM2FW).disasm $(UM2FW).reasm $(UM2FW).asm trampoline.elf trampoline.hex trampoline.asm retargeted.hex retargeted.elf retargeted.asm finalmerge.hex
 
 allmerged: $(UM2FW)-cardboot.hex
 
-mergecompare: $(UM2FW)-cardboot.disasm merged_pre.disasm $(UM2FW)-cardboot.lst
+$(UM2FW)-cardboot.hex: finalmerge.hex
+	mv $< $@
 
-$(UM2FW)-cardboot.elf: merged_post.asm
+%.elf: %.asm
 	avr-as -mmcu=$(MCU_TARGET) -mall-opcodes -W -o $@ $<
-# I discovered that avr-as won't assemble the resulting asm file correctly, even if the asm file seems correct
 
-# insert trampoline jump before bootloader region, and replace reset vector jump with a jump to the bootloader
-# to check between whether the FW uses JMP or RJMP, Make is recursively invoked to re-evaluate the search results
-merged_post.asm: merged_pre.asm
-ifdef RECURSIVE_MAKE
-ifneq ($(strip $(shell $(RESET_FIND_JMP) < merged_pre.asm)),)
-	@echo "JMP found: $(shell $(RESET_FIND_JMP) < $<)"
-	sed -r "s/^(\.org\s+0x[0]*?$(BOOT_ADR_HEX)\s*?)$$/.org $(TRAMPOLINE_ADR)\r\n\tjmp $(shell $(RESET_FIND_JMP) <$<)\t; trampoline\r\n\1/" <$< | \
-	sed -r "N;s/^\.org\s+0x[0]+\s+jmp\s+0x[0-9a-fA-F]+.*?$$/.org 0x0\r\n\tjmp 0x$(BOOT_ADR_HEX)\t; to bootloader/" > $@
-endif
-ifneq ($(strip $(shell $(RESET_FIND_RJMP) < merged_pre.asm)),)
-	@echo "RJMP found: $(shell $(RESET_FIND_RJMP) < $<)"
-	sed -r "s/^(\.org\s+0x[0]*?$(BOOT_ADR_HEX)\s*?)$$/.org $(TRAMPOLINE_ADR)\r\n\tjmp $(shell printf "0x%X" $(shell $(RESET_FIND_RJMP) <$<))\t; trampoline\r\n\1/" <$< | \
-	sed -r "N;s/^\.org\s+0x[0]+\s+jmp\s+0x[0-9a-fA-F]+.*?$$/.org 0x0\r\n\tjmp 0x$(BOOT_ADR_HEX)\t; to bootloader/" > $@
-endif
-else
-	@echo "Recursive Make"
-	make merged_post.asm RECURSIVE_MAKE=1
-endif
+$(UM2FW).disasm: $(UM2FW).hex
 
-# disassemble, then remove lines that might be syntax errors, then turn address labels into origin labels
-merged_pre.asm: merged_pre.hex
-	$(OBJDUMP) -D -z --no-show-raw-insn --stop-address=0xFFFFFFFF -m avr6 $< | \
+$(UM2FW).reasm: $(UM2FW).disasm
+	cat $< | \
 	grep -v "Disassembly of section" | \
 	grep -v "file format ihex" | \
 	grep -v "<\.sec[0-9]>:" | \
 	sed -r "s/\s+([0-9a-f]+):\s+(.*+)$$/.org 0x\U\1\r\n\t\E\2/" > $@
 
-# merge the two ihex files but eliminate "end of file" indicator
-merged_pre.hex: $(UM2FW).hex $(TARGET).hex
-	cat $^ | grep -v ":00000001FF" > $@
+trampoline.asm: $(UM2FW).disasm
+ifdef RECURSIVE_MAKE
+ifneq ($(strip $(shell $(RESET_FIND_JMP) < $(UM2FW).disasm)),)
+	@echo "JMP found: $(shell $(RESET_FIND_JMP) < $<)"
+	@printf ".org $(TRAMPOLINE_ADR)\r\n\tjmp $(shell $(RESET_FIND_JMP) <$<)" > $@
+	
+endif
+ifneq ($(strip $(shell $(RESET_FIND_RJMP) < $(UM2FW).disasm)),)
+	@echo "RJMP found: $(shell $(RESET_FIND_RJMP) < $<)"
+	@printf ".org $(TRAMPOLINE_ADR)\r\n\tjmp $(shell printf "0x%X" $(shell $(RESET_FIND_RJMP) <$<))" > $@
+endif
+else
+	@echo "Recursive Make"
+	make $@ RECURSIVE_MAKE=1
+endif
+
+retargeted.asm: $(UM2FW).reasm
+	sed -r "N;s/^\.org\s+0x[0]+\s+jmp\s+0x[0-9a-fA-F]+.*?$$/.org 0x0\r\n\tjmp 0x$(BOOT_ADR_HEX)\t; to bootloader/" < $< > $@
+
+finalmerge.hex: retargeted.hex $(UM2FW).hex trampoline.hex $(BOOTFW).hex
+	head -n 1 retargeted.hex > $@
+	tail -n +2 $(UM2FW).hex | grep -v ":00000001FF" >> $@
+	cat trampoline.hex | grep -v "00000000000000000000000000000000000" | grep -v "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" | grep -v ":00000001FF" >> $@
+	cat $(BOOTFW).hex >> $@
 
 cleanappbin:
 	rm -rf app.bin
