@@ -36,20 +36,20 @@ OBJCOPY     = avr-objcopy
 OBJDUMP     = avr-objdump
 SIZE        = avr-size
 
-
 all:	$(TARGET).elf lst text size
 
 $(TARGET).elf: $(OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
 
-clean: cleanmerged
+clean: cleanmerged cleanartifacts
+	rm -rf $(TARGET).hex
+
+cleanartifacts: 
 	rm -rf *.o $(TARGET).elf *.eps *.bak *.a
 	rm -rf *.lst *.map $(EXTRA_CLEAN_FILES)
-	rm -rf $(TARGET).hex $(TARGET).size.txt
 
 size: $(TARGET).elf
 	$(SIZE) -C --mcu=$(MCU_TARGET) $(TARGET).elf
-	$(SIZE) -C --mcu=$(MCU_TARGET) $(TARGET).elf > $(TARGET).size.txt
 
 lst:  $(TARGET).lst
 %.lst: %.elf
@@ -81,8 +81,11 @@ TRAMPOLINE_ADR = $(shell echo "$(BOOT_ADR)" | gawk --non-decimal-data '{ printf 
 RESET_FIND_JMP  = sed -n -r "s/^\s*?[0]+:\s+jmp\s+0x([0-9a-fA-F]+).*?$$/0x\U\1/p"
 RESET_FIND_RJMP = sed -n -r "s/^\s*?[0]+:\s+rjmp\s+\.\+([0-9]+).*?$$/\1/p"
 
-cleanmerged:
-	rm -rf $(UM2FW)-cardboot.hex $(UM2FW).disasm $(UM2FW).reasm $(UM2FW).asm trampoline.elf trampoline.hex trampoline.asm retargeted.hex retargeted.elf retargeted.asm finalmerge.hex
+cleanmerged: cleanmergedartifacts
+	rm -rf $(UM2FW)-cardboot.hex
+
+cleanmergedartifacts:
+	rm -rf $(UM2FW).disasm $(UM2FW).reasm $(UM2FW).asm trampoline.elf trampoline.hex trampoline.asm retargeted.hex retargeted.elf retargeted.asm finalmerge.hex
 
 allmerged: $(UM2FW)-cardboot.hex
 
@@ -94,6 +97,7 @@ $(UM2FW)-cardboot.hex: finalmerge.hex
 
 $(UM2FW).disasm: $(UM2FW).hex
 
+# make a assembly file from the disassembly, clean it up so the assembler doesn't see errors
 $(UM2FW).reasm: $(UM2FW).disasm
 	cat $< | \
 	grep -v "Disassembly of section" | \
@@ -101,12 +105,13 @@ $(UM2FW).reasm: $(UM2FW).disasm
 	grep -v "<\.sec[0-9]>:" | \
 	sed -r "s/\s+([0-9a-f]+):\s+(.*+)$$/.org 0x\U\1\r\n\t\E\2/" > $@
 
+# creates an assembly code file that only contains the trampoline jump to application, at the address just before the bootloader
+# the make is invoked recursively to cause the if conditions to be re-evaluated
 trampoline.asm: $(UM2FW).disasm
 ifdef RECURSIVE_MAKE
 ifneq ($(strip $(shell $(RESET_FIND_JMP) < $(UM2FW).disasm)),)
 	@echo "JMP found: $(shell $(RESET_FIND_JMP) < $<)"
 	@printf ".org $(TRAMPOLINE_ADR)\r\n\tjmp $(shell $(RESET_FIND_JMP) <$<)" > $@
-	
 endif
 ifneq ($(strip $(shell $(RESET_FIND_RJMP) < $(UM2FW).disasm)),)
 	@echo "RJMP found: $(shell $(RESET_FIND_RJMP) < $<)"
@@ -117,9 +122,15 @@ else
 	make $@ RECURSIVE_MAKE=1
 endif
 
+# replaces the old reset vector with a jump to the bootloader
+# removes all .org because they cause avr-as to not work right if RJMPs are used
 retargeted.asm: $(UM2FW).reasm
-	sed -r "N;s/^\.org\s+0x[0]+\s+jmp\s+0x[0-9a-fA-F]+.*?$$/.org 0x0\r\n\tjmp 0x$(BOOT_ADR_HEX)\t; to bootloader/" < $< > $@
+	sed -r "N;s/^\.org\s+0x[0]+\s+jmp\s+0x[0-9a-fA-F]+.*?$$/.org 0x0\r\n\tjmp 0x$(BOOT_ADR_HEX)\t; to bootloader/" < $< | 
+	grep -v "\.org 0x" > $@
 
+# only the first line of retargeted.hex is still guaranteed to be correct, the rest comes from the original FW
+# then the trampoline is added, but the trampoline hex has a lot of blanks which need to be removed
+# then the bootloader is appended to the end
 finalmerge.hex: retargeted.hex $(UM2FW).hex trampoline.hex $(BOOTFW).hex
 	head -n 1 retargeted.hex > $@
 	tail -n +2 $(UM2FW).hex | grep -v ":00000001FF" >> $@
