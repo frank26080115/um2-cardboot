@@ -123,7 +123,7 @@ retargeted.asm: $(UM2FW).reasm
 finalmerge.hex: retargeted.hex $(UM2FW).hex trampoline.hex $(BOOTFW).hex
 	head -n 1 retargeted.hex > $@
 	tail -n +2 $(UM2FW).hex | grep -v ":00000001FF" >> $@
-	cat trampoline.hex | grep -v "00000000000000000000000000000000000" | grep -v "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" | grep -v ":00000001FF" >> $@
+	cat trampoline.hex | grep -v -E "(00000000|FFFFFFFF)[0-9A-F][0-9A-F]$$" | grep -v ":00000001FF" | tee exam.hex >> $@
 	cat $(BOOTFW).hex >> $@
 
 cleanappbin:
