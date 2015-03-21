@@ -3,15 +3,16 @@
 #------------------------------------------------------------------
 # Change these three defs for the target device
 
-MCU_TARGET  = atmega2560	# Target device to be used
-F_CPU       = 16000000	# CPU clock frequency [Hz]
+MCU_TARGET  = atmega2560
+F_CPU       = 16000000
 
 # Boot loader start address, as hex in bytes
 #BOOT_ADR    = 0x3F000
 BOOT_ADR     = 0x3E000
 # under 4096 bytes compiled size
 
-AS_2NDARY_BOOTLOADER = 1	# Compile as a secondary bootloader
+# Compile as a secondary bootloader
+AS_2NDARY_BOOTLOADER = 1
 
 TARGET      = um2_cardboot
 CSRC        = main.c pff.c mmcbbp.c
@@ -32,6 +33,8 @@ LDFLAGS     = -Wl,--relax,--gc-sections -Wl,-Map,$(TARGET).map -Wl,--section-sta
 OBJ         = $(CSRC:.c=.o) $(ASRC:.S=.o)
 
 CC          = avr-gcc
+LD          = avr-ld
+AS          = avr-as
 OBJCOPY     = avr-objcopy
 OBJDUMP     = avr-objdump
 SIZE        = avr-size
@@ -92,8 +95,11 @@ allmerged: $(UM2FW)-cardboot.hex
 $(UM2FW)-cardboot.hex: finalmerge.hex
 	mv $< $@
 
-%.elf: %.asm
-	avr-as -mmcu=$(MCU_TARGET) -mall-opcodes -W -o $@ $<
+%.o: %.asm
+	$(AS) -mmcu=$(MCU_TARGET) -mall-opcodes -W -o $@ $<
+
+%.elf: %.o %.asm
+	$(LD) -mavr6 -nostartfiles -o $@ $<
 
 $(UM2FW).disasm: $(UM2FW).hex
 
@@ -103,7 +109,7 @@ $(UM2FW).reasm: $(UM2FW).disasm
 	grep -v "Disassembly of section" | \
 	grep -v "file format ihex" | \
 	grep -v "<\.sec[0-9]>:" | \
-	sed -r "s/\s+([0-9a-f]+):\s+(.*+)$$/.org 0x\U\1\r\n\t\E\2/" > $@
+	sed -r "s/^\s+([0-9a-f]+):\s+(.*+)$$/.org 0x\U\1\r\n\t\E\2/" > $@
 
 # creates an assembly code file that only contains the trampoline jump to application, at the address just before the bootloader
 # the make is invoked recursively to cause the if conditions to be re-evaluated
@@ -125,7 +131,7 @@ endif
 # replaces the old reset vector with a jump to the bootloader
 # removes all .org because they cause avr-as to not work right if RJMPs are used
 retargeted.asm: $(UM2FW).reasm
-	sed -r "N;s/^\.org\s+0x[0]+\s+jmp\s+0x[0-9a-fA-F]+.*?$$/.org 0x0\r\n\tjmp 0x$(BOOT_ADR_HEX)\t; to bootloader/" < $< | 
+	sed -r "N;s/^\.org\s+0x[0]+\s+jmp\s+0x[0-9a-fA-F]+.*?$$/.org 0x0\r\n\tjmp 0x$(BOOT_ADR_HEX)\t; to bootloader/" < $< | \
 	grep -v "\.org 0x" > $@
 
 # only the first line of retargeted.hex is still guaranteed to be correct, the rest comes from the original FW
@@ -134,7 +140,7 @@ retargeted.asm: $(UM2FW).reasm
 finalmerge.hex: retargeted.hex $(UM2FW).hex trampoline.hex $(BOOTFW).hex
 	head -n 1 retargeted.hex > $@
 	tail -n +2 $(UM2FW).hex | grep -v ":00000001FF" >> $@
-	cat trampoline.hex | grep -v -E "(00000000|FFFFFFFF)[0-9A-F][0-9A-F]$$" | grep -v ":00000001FF" | tee exam.hex >> $@
+	cat trampoline.hex | grep -v -E "(00000000|FFFFFFFF)[0-9A-F][0-9A-F]$$" | grep -v ":00000001FF" | tail -n 2 >> $@
 	cat $(BOOTFW).hex >> $@
 
 cleanappbin:
