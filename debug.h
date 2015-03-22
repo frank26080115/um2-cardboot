@@ -4,19 +4,30 @@
 #include <stdio.h>
 #include <avr/pgmspace.h>
 
+#if (BOOT_ADR > UINT16_MAX)
+#define EXTEND_PSTR
+/*
+PSTR is convenient to place strings in flash
+It returns a pointer, but pointers on AVR are 16 bit
+Our bootloader is beyond the maximum value of 16 bit
+So everything that uses PSTR will fail
+See comments inside dbg_printf_P for solution
+*/
+#endif
+
 #ifdef ENABLE_DEBUG
 
 	void dbg_init(void);
 	void dbg_deinit(void);
-	int ser_putch(uint8_t, FILE*);
 
 	extern FILE ser_stdout;
 
-	#define dbg_printf(fmt, args...) fprintf_P(&ser_stdout, PSTR(fmt), ##args)
-	// this doesn't work, but this is the same way I've debugged everywhere else on a ton of other platforms
-	// ser_putch is now public, and can be used for a more primitive debug
-
-	//#define dbg_printf(fmt, args...)
+	#ifdef EXTEND_PSTR
+		#define dbg_printf(fmt, args...) dbg_printf_P(PSTR(fmt), ##args)
+		int dbg_printf_P(const PROGMEM char*, ...);
+	#else
+		#define dbg_printf(fmt, args...) fprintf_P(&ser_stdout, PSTR(fmt), ##args)
+	#endif
 
 #else
 	#define dbg_init()

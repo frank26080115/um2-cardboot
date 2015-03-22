@@ -62,6 +62,7 @@ void dbg_init(void)
 	// if the primary bootloader did set the baud, that baud will be used instead
 	UCSRnC = (1 << UCSZn1) | (1 << UCSZn0);
 	UCSRnB = _BV(TXENn) | _BV(RXENn);
+
 	#endif
 }
 
@@ -84,3 +85,39 @@ void dbg_deinit(void)
 	}
 	#endif
 }
+
+#ifdef EXTEND_PSTR
+/*
+The problem is pointers are 16 bit on AVR platform
+But we placed these strings beyond that
+Since we know the starting address of our bootloader
+We can simply cast the 16 bit pointer to a 32 bit integer
+and add an offset to it, according to the starting address
+then use pgm_read_byte_far to copy the characters
+*/
+int dbg_printf_P(const PROGMEM char* __pfmt, ...)
+{
+	va_list args;
+	va_start (args, __pfmt);
+
+	uint32_t far_base = BOOT_ADR & 0xFFFF0000;
+	char     fmtbuf[128];
+	uint8_t  i;
+	uint32_t j;
+	char     c;
+
+	j = (uint32_t)__pfmt;
+	j+= far_base;
+
+	for (i = 0; ; i++, j++) {
+		fmtbuf[i] = c = pgm_read_byte_far(j);
+		if (c == '\0') break;
+	}
+
+	int r = vfprintf (&ser_stdout, fmtbuf, args);
+
+	va_end (args);
+
+	return r;
+}
+#endif

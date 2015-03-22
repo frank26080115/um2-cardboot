@@ -147,17 +147,6 @@ static void check_reset_vector(void)
 	if (tmp2 != tmp1)
 	{
 		dbg_printf("reset vector requires overwrite, read 0x%08X, should be 0x%08X\r\n", tmp2, tmp1);
-		ser_putch('*', 0);
-		ser_putch('[', 0);
-		ser_putch(((uint8_t*)(&tmp1))[0], 0);
-		ser_putch(((uint8_t*)(&tmp1))[1], 0);
-		ser_putch(((uint8_t*)(&tmp1))[2], 0);
-		ser_putch(((uint8_t*)(&tmp1))[3], 0);
-		ser_putch(((uint8_t*)(&tmp2))[0], 0);
-		ser_putch(((uint8_t*)(&tmp2))[1], 0);
-		ser_putch(((uint8_t*)(&tmp2))[2], 0);
-		ser_putch(((uint8_t*)(&tmp2))[3], 0);
-		ser_putch(']', 0);
 		// this means existing flash will not activate the bootloader
 		// so we force a rewrite of this vector
 		memset(Buff, 0xFF, SPM_PAGESIZE); // Clear buffer
@@ -245,12 +234,10 @@ int main (void)
 	_delay_ms(100);
 	#endif
 	dbg_printf("\r\nUM2 SD Card Bootloader\r\n");
-	ser_putch('a', 0);
-	ser_putch(boot_lock_fuse_bits_get(GET_LOW_FUSE_BITS), 0);
-	ser_putch(boot_lock_fuse_bits_get(GET_HIGH_FUSE_BITS), 0);
-	ser_putch(boot_lock_fuse_bits_get(GET_EXTENDED_FUSE_BITS), 0);
-	ser_putch(boot_lock_fuse_bits_get(GET_LOCK_BITS), 0);
-	ser_putch('A', 0);
+	#ifdef ENABLE_DEBUG
+	dbg_printf("LFUSE 0x%02X, HFUSE 0x%02X\r\n", boot_lock_fuse_bits_get(GET_LOW_FUSE_BITS), boot_lock_fuse_bits_get(GET_HIGH_FUSE_BITS));
+	dbg_printf("EFUSE 0x%02X, LOCKBITS 0x%02X\r\n", boot_lock_fuse_bits_get(GET_EXTENDED_FUSE_BITS), boot_lock_fuse_bits_get(GET_LOCK_BITS));
+	#endif
 
 	DWORD fa; // Flash address
 	WORD br;  // Bytes read
@@ -277,33 +264,30 @@ int main (void)
 
 	if (canjump)
 	{
-		dly_100us();
+		#ifndef ENABLE_DEBUG
+		dly_100us(); // only done to wait for signals to rise
+		#endif
 
 		if (!CARD_DETECTED()) {
 			dbg_printf("card not detected\r\n");
-			ser_putch('b', 0);
 			start_app();
 		}
 
 		if (!BUTTON_PRESSED()) {
 			dbg_printf("button not pressed\r\n");
-			ser_putch('c', 0);
 			start_app();
 		}
 
-		ser_putch('d', 0);
 		dbg_printf("can jump, almost primed\r\n");
 	}
 	else
 	{
-		ser_putch('e', 0);
 		dbg_printf("forced to boot from card\r\n");
 	}
 
 	pf_mount(&Fatfs); // Initialize file system
 	if (pf_open("app.bin") != FR_OK) // Open application file
 	{
-		ser_putch('f', 0);
 		dbg_printf("file failed to open\r\n");
 		start_app();
 	}
@@ -313,7 +297,6 @@ int main (void)
 	// wait for button release
 	#ifdef ENABLE_DEBUG
 	if (canjump) {
-		ser_putch('g', 0);
 		dbg_printf("waiting for button release...");
 	}
 	#endif
@@ -323,7 +306,6 @@ int main (void)
 	}
 	#ifdef ENABLE_DEBUG
 	if (canjump) {
-		ser_putch('h', 0);
 		dbg_printf(" RELEASED!!\r\n");
 	}
 	#endif
@@ -357,14 +339,11 @@ int main (void)
 				#elif defined(VECTORS_USE_RJMP)
 					make_rjmp(0, BOOT_ADR);
 				#endif
-				ser_putch('i', 0);
 				dbg_printf("reset vector, old = 0x%08X , new = 0x%08X\r\n", app_reset_vector, (*((xjmp_t*)Buff)));
 				if (br <= 0) br += sizeof(xjmp_t);
 			}
 			else if (fa == (BOOT_ADR - SPM_PAGESIZE)) // If is trampoline
 			{
-				ser_putch('j', 0);
-
 				// we need a way to launch the application
 				// that's why we saved the old reset vector
 				// we check where it points to, and write it as a trampoline
@@ -411,7 +390,14 @@ int main (void)
 
 			for (i = 0; i < SPM_PAGESIZE && to_write == 0; i++)
 			{ // check if the page has differences
-				if (pgm_read_byte_far(i) != Buff[i]) {
+				if (
+					#if (FLASHEND > USHRT_MAX)
+						pgm_read_byte_far(i)
+					#else
+						pgm_read_byte_far(i)
+					#endif
+						!= Buff[i])
+				{
 					to_write = 1;
 				}
 			}
@@ -429,14 +415,12 @@ int main (void)
 			flash_write(fa, Buff);
 			bw += br;
 			dbg_printf("bytes written: %d\r\n", bw);
-			ser_putch('+', 0);
 		}
 	}
 
 	if (bw > 0)
 	{
 		dbg_printf("all done\r\n");
-		ser_putch('!', 0);
 		// triple blink the LED to indicate that new firmware written
 		while (1) {
 			LED_blink_pattern(0x402A);
@@ -445,7 +429,6 @@ int main (void)
 	else
 	{
 		dbg_printf("all done, nothing written\r\n");
-		ser_putch('?', 0);
 		// single blink the LED to indicate that nothing was actually written
 		while (1) {
 			LED_blink_pattern(0x4002);
@@ -460,11 +443,9 @@ static void start_app(void)
 	#ifdef ENABLE_DEBUG
 	if (!canjump) {
 		dbg_printf("no app to start\r\n");
-		ser_putch('^', 0);
 	}
 	else {
 		dbg_printf("starting app\r\n");
-		ser_putch('&', 0);
 	}
 	#endif
 
