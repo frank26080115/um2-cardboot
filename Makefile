@@ -7,9 +7,8 @@ MCU_TARGET  = atmega2560
 F_CPU       = 16000000
 
 # Boot loader start address, as hex in bytes
-#BOOT_ADR    = 0x3F000
-BOOT_ADR     = 0x3E000
-# under 4096 bytes compiled size
+BOOT_ADR     = 0x30000
+# use 0x3C000 for under 4096 bytes compiled size (no debug)
 
 # Compile as a secondary bootloader
 AS_2NDARY_BOOTLOADER = 1
@@ -26,9 +25,14 @@ ifdef AS_2NDARY_BOOTLOADER
 DEFS += -DAS_2NDARY_BOOTLOADER
 endif
 
+ifdef ENABLE_DEBUG
+CSRC += debug.c
+DEFS += -DENABLE_DEBUG
+endif
+
 ASFLAGS     = -Wa,-adhlns=$(<:.S=.lst),-gstabs $(DEFS)
 ALL_ASFLAGS = -mmcu=$(MCU_TARGET) -I. -x assembler-with-cpp $(ASFLAGS)
-CFLAGS      = -g$(DEBUG) -Wall $(OPTIMIZE) -mmcu=$(MCU_TARGET) $(DEFS)
+CFLAGS      = -g$(DEBUG) -Wall $(OPTIMIZE) -mmcu=$(MCU_TARGET) -std=gnu99 $(DEFS)
 LDFLAGS     = -Wl,--relax,--gc-sections -Wl,-Map,$(TARGET).map -Wl,--section-start,.text=$(BOOT_ADR) -mrelax
 OBJ         = $(CSRC:.c=.o) $(ASRC:.S=.o)
 
@@ -47,7 +51,7 @@ $(TARGET).elf: $(OBJ)
 clean: cleanmerged cleanartifacts
 	rm -rf $(TARGET).hex
 
-cleanartifacts: 
+cleanartifacts: cleanmergedartifacts
 	rm -rf *.o $(TARGET).elf *.eps *.bak *.a
 	rm -rf *.lst *.map $(EXTRA_CLEAN_FILES)
 
@@ -72,6 +76,12 @@ text: $(TARGET).hex
 %.disasm: %.hex
 	$(OBJDUMP) -D -z --no-show-raw-insn --stop-address=0xFFFFFFFF -m avr6 $< > $@
 
+toolversion:
+	make --version | tee -a $@.txt
+	$(CC) --version | tee -a $@.txt
+	$(LD) --version | tee -a $@.txt
+	$(AS) --version | tee -a $@.txt
+
 # The code below takes an existing firmware (for the Ultimaker2) and attaches the SD card bootloader to it
 # This requires some swapping and insertion of jump instructions, which is performed with disassembled code
 # There are some weird code here, mainly because makefiles can't do math and makefiles have stupid rules about parenthesis
@@ -90,7 +100,7 @@ cleanmerged: cleanmergedartifacts
 cleanmergedartifacts:
 	rm -rf $(UM2FW).disasm $(UM2FW).reasm $(UM2FW).asm trampoline.elf trampoline.hex trampoline.asm retargeted.hex retargeted.elf retargeted.asm finalmerge.hex
 
-allmerged: $(UM2FW)-cardboot.hex
+allmerged: $(UM2FW)-cardboot.hex size
 
 $(UM2FW)-cardboot.hex: finalmerge.hex
 	mv $< $@

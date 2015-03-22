@@ -60,21 +60,26 @@
 #include <avr/interrupt.h>
 #include <avr/io.h>
 #include <avr/pgmspace.h>
+#include <avr/boot.h>
 #include <util/delay.h>
 #include <string.h>
 #include "pff.h"
+#include "debug.h"
 
 #define addr_t int32_t
 #ifdef __AVR_MEGA__
 #define VECTORS_USE_JMP
 #define xjmp_t uint32_t
+#define pgm_read_xjmp(x) pgm_read_dword_far(x)
 #else
 #define VECTORS_USE_RJMP
 #define xjmp_t uint16_t
+#define pgm_read_xjmp(x) pgm_read_word(x)
 #endif
 
-void flash_erase (DWORD);              //   Erase a flash page (asmfunc.S)
-void flash_write (DWORD, const BYTE*); // Program a flash page (asmfunc.S)
+void dly_100us (void); // from asmfunc.S
+static void start_app(void);
+void flash_write(uint32_t adr, uint8_t* dat);
 
 FATFS Fatfs;             // Petit-FatFs work area
 BYTE Buff[SPM_PAGESIZE]; // Page data buffer
@@ -104,7 +109,6 @@ xjmp_t app_reset_vector;
 #define LED_OFF() PORTH &= ~_BV(LED_BIT)
 #define LED_TOG() PORTH ^= _BV(LED_BIT)
 
-static void start_app(void);
 #ifdef AS_2NDARY_BOOTLOADER
 #ifdef VECTORS_USE_JMP
 static xjmp_t make_jmp(addr_t x)
@@ -116,7 +120,8 @@ static xjmp_t make_jmp(addr_t x)
 	y |= x;
 	y |= 0x940C0000;
 	y &= 0x95FDFFFF;
-	return y;
+	return ((y & 0x0000FFFF) << 16 | (y & 0xFFFF0000) >> 16);
+	// AVR 32 bit instruction ordering isn't straight forward little-endian
 }
 #endif
 #ifdef VECTORS_USE_RJMP
@@ -132,20 +137,31 @@ static xjmp_t make_rjmp(addr_t src, addr_t dst)
 
 static void check_reset_vector(void)
 {
-	xjmp_t tmp;
+	xjmp_t tmp1, tmp2;
 	#ifdef VECTORS_USE_JMP
-	tmp = make_jmp(BOOT_ADR);
-	if (pgm_read_dword(0) != tmp)
+	tmp1 = make_jmp(BOOT_ADR);
 	#elif defined(VECTORS_USE_RJMP)
-	tmp = make_rjmp(0, BOOT_ADR);
-	if (pgm_read_word(0) != tmp)
+	tmp1 = make_rjmp(0, BOOT_ADR);
 	#endif
+	tmp2 = pgm_read_xjmp(0);
+	if (tmp2 != tmp1)
 	{
+		dbg_printf("reset vector requires overwrite, read 0x%08X, should be 0x%08X\r\n", tmp2, tmp1);
+		ser_putch('*', 0);
+		ser_putch('[', 0);
+		ser_putch(((uint8_t*)(&tmp1))[0], 0);
+		ser_putch(((uint8_t*)(&tmp1))[1], 0);
+		ser_putch(((uint8_t*)(&tmp1))[2], 0);
+		ser_putch(((uint8_t*)(&tmp1))[3], 0);
+		ser_putch(((uint8_t*)(&tmp2))[0], 0);
+		ser_putch(((uint8_t*)(&tmp2))[1], 0);
+		ser_putch(((uint8_t*)(&tmp2))[2], 0);
+		ser_putch(((uint8_t*)(&tmp2))[3], 0);
+		ser_putch(']', 0);
 		// this means existing flash will not activate the bootloader
 		// so we force a rewrite of this vector
 		memset(Buff, 0xFF, SPM_PAGESIZE); // Clear buffer
-		(*((xjmp_t*)Buff)) = tmp;
-		flash_erase(0);
+		(*((xjmp_t*)Buff)) = tmp1;
 		flash_write(0, Buff);
 	}
 }
@@ -154,6 +170,17 @@ static void check_reset_vector(void)
 
 static void LED_blink_pattern(uint16_t x)
 {
+	// each _delay_ms call is inlined so this function exists so we don't put _delay_ms everywhere
+	// thus saving memory
+
+	// the highest bit is a boundary bit, used to dictate the length of the pattern
+	// bit 0 doesn't actually do anything
+	// all the bits in between dictate the pattern itself
+	// all 1s would mean "keep LED on"
+	// all 0s would mean "keep LED off"
+	// 101010 would mean "blink the LED twice fast"
+	// 1001100110 would mean "blink the LED twice slowly"
+
 	while (x)
 	{
 		x >>= 1;
@@ -167,12 +194,74 @@ static void LED_blink_pattern(uint16_t x)
 	}
 }
 
+static char can_jump(void)
+{
+	#ifdef AS_2NDARY_BOOTLOADER
+	check_reset_vector();
+	xjmp_t tmpx = pgm_read_xjmp(BOOT_ADR - sizeof(xjmp_t));
+	#ifdef VECTORS_USE_JMP
+	if ((tmpx & 0xFFFF) == 0xFFFF || (tmpx & 0xFFFF) == 0x0000 || tmpx == make_jmp(BOOT_ADR))
+	#elif defined(VECTORS_USE_RJMP)
+	if (tmpx == 0xFFFF || tmpx == 0x0000 || tmpx == make_rjmp(0, BOOT_ADR))
+	#endif
+	{
+		// jump into user app is missing
+		return 0;
+	}
+	#else
+	uint16_t tmp16 = pgm_read_word_near(0);
+	if (tmp16 == 0xFFFF || tmp16 == 0x0000) {
+		return 0;
+	}
+	#endif
+
+	return 1;
+}
+
+void flash_write(uint32_t adr, uint8_t* dat)
+{
+	// I replaced the old flash_write from asmfunc.S with this version
+	// because the old version didn't seem to work
+	// I was hoping that this avr-libc implementation would be safer and more portable
+	// but it still doesn't work
+
+	boot_spm_busy_wait();
+	boot_rww_enable();
+	boot_page_erase(adr);
+	boot_spm_busy_wait();
+	uint32_t i;
+	uint16_t j;
+	for (i = adr, j = 0; j < SPM_PAGESIZE; i += 2, j += 2) {
+		boot_page_fill(i, *((uint16_t*)(&dat[j])));
+	}
+	boot_page_write(adr);
+	boot_spm_busy_wait();
+}
+
 int main (void)
 {
+	#ifdef ENABLE_DEBUG
+	dbg_init();
+	_delay_ms(100);
+	#endif
+	dbg_printf("\r\nUM2 SD Card Bootloader\r\n");
+	ser_putch('a', 0);
+	ser_putch(boot_lock_fuse_bits_get(GET_LOW_FUSE_BITS), 0);
+	ser_putch(boot_lock_fuse_bits_get(GET_HIGH_FUSE_BITS), 0);
+	ser_putch(boot_lock_fuse_bits_get(GET_EXTENDED_FUSE_BITS), 0);
+	ser_putch(boot_lock_fuse_bits_get(GET_LOCK_BITS), 0);
+	ser_putch('A', 0);
+
 	DWORD fa; // Flash address
-	WORD br; // Bytes read
+	WORD br;  // Bytes read
 	DWORD bw; // Bytes written
-	WORD i; // Index for page difference check
+	WORD i;   // Index for page difference check
+	char canjump;
+
+	CARDDETECT_DDRx &= ~_BV(CARDDETECT_BIT); // pin as input
+	CARDDETECT_PORTx |= _BV(CARDDETECT_BIT); // enable internal pull-up resistor
+	BUTTON_DDRx &= ~_BV(BUTTON_BIT); // pin as input
+	BUTTON_PORTx |= _BV(BUTTON_BIT); // enable internal pull-up resistor
 
 	#ifdef AS_2NDARY_BOOTLOADER
 	char end_of_file = 0;
@@ -180,38 +269,64 @@ int main (void)
 	check_reset_vector();
 	#endif
 
+	canjump = can_jump();
+
 	// prepare LED
 	LED_DDRx |= _BV(LED_BIT); // pin as output
 	LED_OFF();
 
-	// check for card
-	CARDDETECT_DDRx &= ~_BV(CARDDETECT_BIT); // pin as input
-	CARDDETECT_PORTx |= _BV(CARDDETECT_BIT); // enable internal pull-up resistor
-	if (!CARD_DETECTED()) {
-		start_app();
-	}
+	if (canjump)
+	{
+		dly_100us();
 
-	// check for button held
-	BUTTON_DDRx &= ~_BV(BUTTON_BIT);
-	BUTTON_PORTx |= _BV(BUTTON_BIT);
-	if (!BUTTON_PRESSED()) {
-		start_app();
+		if (!CARD_DETECTED()) {
+			dbg_printf("card not detected\r\n");
+			ser_putch('b', 0);
+			start_app();
+		}
+
+		if (!BUTTON_PRESSED()) {
+			dbg_printf("button not pressed\r\n");
+			ser_putch('c', 0);
+			start_app();
+		}
+
+		ser_putch('d', 0);
+		dbg_printf("can jump, almost primed\r\n");
+	}
+	else
+	{
+		ser_putch('e', 0);
+		dbg_printf("forced to boot from card\r\n");
 	}
 
 	pf_mount(&Fatfs); // Initialize file system
 	if (pf_open("app.bin") != FR_OK) // Open application file
 	{
-		// File failed to open
+		ser_putch('f', 0);
+		dbg_printf("file failed to open\r\n");
 		start_app();
 	}
 
 	LED_ON();
 
 	// wait for button release
-	while (BUTTON_PRESSED()) {
+	#ifdef ENABLE_DEBUG
+	if (canjump) {
+		ser_putch('g', 0);
+		dbg_printf("waiting for button release...");
+	}
+	#endif
+	while (BUTTON_PRESSED() && canjump) {
 		// blink the LED while waiting
 		LED_blink_pattern(0x10C);
 	}
+	#ifdef ENABLE_DEBUG
+	if (canjump) {
+		ser_putch('h', 0);
+		dbg_printf(" RELEASED!!\r\n");
+	}
+	#endif
 
 	for (fa = 0, bw = 0; fa < BOOT_ADR; fa += SPM_PAGESIZE) // Update all application pages
 	{
@@ -232,6 +347,9 @@ int main (void)
 			#ifdef AS_2NDARY_BOOTLOADER
 			if (fa < SPM_PAGESIZE) // If is very first page
 			{
+				// the old reset vector will point inside the application
+				// but we need it to point into the bootloader, or else the bootloader will never launch
+				// we need to save the old reset vector, then replace it
 				app_reset_vector = (*((xjmp_t*)Buff));
 				(*((xjmp_t*)Buff)) = 
 				#ifdef VECTORS_USE_JMP
@@ -239,38 +357,53 @@ int main (void)
 				#elif defined(VECTORS_USE_RJMP)
 					make_rjmp(0, BOOT_ADR);
 				#endif
+				ser_putch('i', 0);
+				dbg_printf("reset vector, old = 0x%08X , new = 0x%08X\r\n", app_reset_vector, (*((xjmp_t*)Buff)));
 				if (br <= 0) br += sizeof(xjmp_t);
 			}
-			else if (fa == (BOOT_ADR - SPM_PAGESIZE))
+			else if (fa == (BOOT_ADR - SPM_PAGESIZE)) // If is trampoline
 			{
+				ser_putch('j', 0);
+
+				// we need a way to launch the application
+				// that's why we saved the old reset vector
+				// we check where it points to, and write it as a trampoline
+				// use the trampoline to launch the real app from the SD card bootloader
+
 				xjmp_t* inst_ptr = ((xjmp_t*)(&Buff[SPM_PAGESIZE-sizeof(xjmp_t)]));
 				#ifdef VECTORS_USE_JMP
 				if ((app_reset_vector & 0xFE0E0000) == 0x940C0000) {
 					// this is a JMP instruction, we can put it here without changing it
 					(*inst_ptr) = app_reset_vector;
+					dbg_printf("trampoline use JMP, addr 0x%08X, insn 0x%08X\r\n", fa, app_reset_vector);
 					if (br <= 0) br += sizeof(xjmp_t); // indicate that we wrote something useful
 				}
 				else if ((app_reset_vector & 0x0000F000) == 0x0000C000) {
 					// this is a RJMP instruction
 					(*inst_ptr) = make_jmp((app_reset_vector & 0x0FFF) << 1);
+					dbg_printf("trampoline RJMP converted to JMP, addr 0x%08X, RJMP 0x%04X, JMP 0x%08X\r\n", fa, app_reset_vector, (*inst_ptr));
 					if (br <= 0) br += sizeof(xjmp_t); // indicate that we wrote something useful
 				}
 				else if ((app_reset_vector & 0xFFFF) == 0xFFFF || (app_reset_vector & 0xFFFF) == 0x0000) {
 					(*inst_ptr) = make_jmp(BOOT_ADR); // if app doesn't exist, make it loop back into the bootloader
+					dbg_printf("trampoline, no app, addr 0x%08X, JMP to boot 0x%08X\r\n", fa, (*inst_ptr));
 				}
 				#elif defined(VECTORS_USE_RJMP)
 				if ((app_reset_vector & 0xF000) == 0xC000) {
 					// this is a RJMP instruction
 					addt_t dst = (app_reset_vector & 0x0FFF) << 1;
 					(*inst_ptr) = make_rjmp(BOOT_ADR - sizeof(xjmp_t), dst);
+					dbg_printf("trampoline, addr 0x%08X, RJMP 0x%04X\r\n", fa, (*inst_ptr));
 				}
 				else if (app_reset_vector == 0xFFFF || app_reset_vector == 0x0000) {
 					(*inst_ptr) = make_rjmp(BOOT_ADR - sizeof(xjmp_t), BOOT_ADR); // if app doesn't exist, make it loop back into the bootloader
+					dbg_printf("trampoline, no app, addr 0x%08X, RJMP 0x%04X\r\n", fa, (*inst_ptr));
 				}
 				#endif
 				else {
 					// hmm... it wasn't a JMP or RJMP but it wasn't blank, we put it here and hope for the best
 					(*inst_ptr) = app_reset_vector;
+					dbg_printf("trampoline, unknown, addr 0x%08X, RJMP 0x%04X\r\n", fa, (*inst_ptr));
 					if (br <= 0) br += sizeof(xjmp_t); // indicate that we wrote something useful
 				}
 			}
@@ -278,7 +411,7 @@ int main (void)
 
 			for (i = 0; i < SPM_PAGESIZE && to_write == 0; i++)
 			{ // check if the page has differences
-				if (pgm_read_byte(i) != Buff[i]) {
+				if (pgm_read_byte_far(i) != Buff[i]) {
 					to_write = 1;
 				}
 			}
@@ -293,14 +426,17 @@ int main (void)
 		if (to_write) // write only if required
 		{
 			LED_TOG(); // blink the LED while writing
-			flash_erase(fa);
 			flash_write(fa, Buff);
 			bw += br;
+			dbg_printf("bytes written: %d\r\n", bw);
+			ser_putch('+', 0);
 		}
 	}
 
 	if (bw > 0)
 	{
+		dbg_printf("all done\r\n");
+		ser_putch('!', 0);
 		// triple blink the LED to indicate that new firmware written
 		while (1) {
 			LED_blink_pattern(0x402A);
@@ -308,6 +444,8 @@ int main (void)
 	}
 	else
 	{
+		dbg_printf("all done, nothing written\r\n");
+		ser_putch('?', 0);
 		// single blink the LED to indicate that nothing was actually written
 		while (1) {
 			LED_blink_pattern(0x4002);
@@ -317,34 +455,26 @@ int main (void)
 
 static void start_app(void)
 {
-	char can_jump = 1;
+	char canjump = can_jump();
 
-	#ifdef AS_2NDARY_BOOTLOADER
-	check_reset_vector();
-	xjmp_t tmpx;
-	#ifdef VECTORS_USE_JMP
-	tmpx = pgm_read_dword(BOOT_ADR - sizeof(xjmp_t));
-	if ((tmpx & 0xFFFF) == 0xFFFF || (tmpx & 0xFFFF) == 0x0000 || tmpx == make_jmp(BOOT_ADR))
-	#elif defined(VECTORS_USE_RJMP)
-	tmpx = pgm_read_word(BOOT_ADR - sizeof(xjmp_t));
-	if (tmpx == 0xFFFF || tmpx == 0x0000 || tmpx == make_rjmp(0, BOOT_ADR))
-	#endif
-	{
-		// jump into user app is missing
-		can_jump = 0;
+	#ifdef ENABLE_DEBUG
+	if (!canjump) {
+		dbg_printf("no app to start\r\n");
+		ser_putch('^', 0);
 	}
-	#else
-	uint16_t tmp16 = pgm_read_word(0);
-	if (tmp16 == 0xFFFF || tmp16 == 0x0000) {
-		can_jump = 0;
+	else {
+		dbg_printf("starting app\r\n");
+		ser_putch('&', 0);
 	}
 	#endif
 
 	// long blink to indicate blank app
-	while (!can_jump)
+	while (!canjump)
 	{
 		LED_blink_pattern(0x87FF);
 	}
+
+	dbg_deinit();
 
 	#ifdef AS_2NDARY_BOOTLOADER
 		// there is an instruction stored here, jump here and execute it
