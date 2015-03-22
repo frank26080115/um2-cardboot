@@ -14,8 +14,8 @@ BOOT_ADR     = 0x30000
 AS_2NDARY_BOOTLOADER = 1
 
 TARGET      = um2_cardboot
-CSRC        = main.c pff.c mmcbbp.c
-ASRC        = asmfunc.S
+CSRC        = main.c pff.c mmcbbp.c spm_helper.c
+ASRC        = asmfunc.S spm_helper_asm.S
 OPTIMIZE    = -Os -mcall-prologues -mrelax -ffunction-sections -fpack-struct -fshort-enums -fno-move-loop-invariants -fno-tree-scev-cprop -fno-inline-small-functions
 DEFS        = -DBOOT_ADR=$(BOOT_ADR) -DF_CPU=$(F_CPU)
 LIBS        =
@@ -23,6 +23,7 @@ DEBUG       = dwarf-2
 
 ifdef AS_2NDARY_BOOTLOADER
 DEFS += -DAS_2NDARY_BOOTLOADER
+DEFS += -DMAGIC_1=0x4D -DMAGIC_2=0x61 -DMAGIC_3=0x67 -DMAGIC_4=0x69
 endif
 
 ifdef ENABLE_DEBUG
@@ -153,10 +154,27 @@ finalmerge.hex: retargeted.hex $(UM2FW).hex trampoline.hex $(BOOTFW).hex
 	cat trampoline.hex | grep -v -E "(00000000|FFFFFFFF)[0-9A-F][0-9A-F]$$" | grep -v ":00000001FF" | tail -n 2 >> $@
 	cat $(BOOTFW).hex >> $@
 
+# if a FW is to be loaded via SD card, it must be named "APP.BIN", all capitals
+
 cleanappbin:
-	rm -rf app.bin
+	rm -rf APP.BIN
 
-appbin: app.bin
+appbin: APP.BIN
 
-app.bin: $(UM2FW).bin
+APP.BIN: $(UM2FW).bin
 	mv $< $@
+
+# avr-dude can be used to flash the bootloader
+
+AVRDUDE   = avrdude
+PROG_TOOL = STK500v2
+PROG_PORT = COM6
+PROG_BAUD = 115200
+DUDE_OPTIONS = -D
+# option -D is required for Arduino STK500v2 bootloader because it does not implement chip erase
+
+flash: $(TARGET).hex
+	$(AVRDUDE) -c$(PROG_TOOL) -p$(MCU_TARGET) -P$(PROG_PORT) -b$(PROG_BAUD) $(DUDE_OPTIONS) -Uflash:w:$<:i
+
+flashmerged: $(UM2FW)-cardboot.hex
+	$(AVRDUDE) -c$(PROG_TOOL) -p$(MCU_TARGET) -P$(PROG_PORT) -b$(PROG_BAUD) $(DUDE_OPTIONS) -Uflash:w:$<:i

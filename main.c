@@ -57,6 +57,7 @@
 /
 /-------------------------------------------------------------------------*/
 
+#include "main.h"
 #include <avr/interrupt.h>
 #include <avr/io.h>
 #include <avr/pgmspace.h>
@@ -66,23 +67,32 @@
 #include "pff.h"
 #include "debug.h"
 
-#define addr_t int32_t
-#ifdef __AVR_MEGA__
-#define VECTORS_USE_JMP
-#define xjmp_t uint32_t
-#define pgm_read_xjmp(x) pgm_read_dword_far(x)
+void dly_100us(void); // from asmfunc.S
+static void start_app(void);
+void flash_write_page(addr_t adr, const uint8_t* dat); // a wrapper
+#if defined(AS_2NDARY_BOOTLOADER) && defined(SCAN_FOR_SPM_SEQUENCE)
+void    flash_erase(DWORD flash_addr, addr_t seq_adr);
+#define flash_erase_call(x) flash_erase(x, spm_seq_addr)
+void    flash_write(DWORD flash_addr, const BYTE* data, addr_t seq_adr);
+#define flash_write_call(x, y) flash_write(x, y, spm_seq_addr)
 #else
-#define VECTORS_USE_RJMP
-#define xjmp_t uint16_t
-#define pgm_read_xjmp(x) pgm_read_word(x)
+void    flash_erase(DWORD flash_addr);
+#define flash_erase_call(x) flash_erase(x)
+void    flash_write(DWORD flash_addr, const BYTE* data);
+#define flash_write_call(x, y) flash_write(x, y)
 #endif
 
-void dly_100us (void); // from asmfunc.S
-static void start_app(void);
-void flash_write(uint32_t adr, uint8_t* dat);
+#ifdef SCAN_FOR_SPM_SEQUENCE
+extern addr_t spm_seq_addr;
+addr_t scan_for_spm(void);
+addr_t try_scan_for_spm(void);
+void call_spm(uint8_t csr, uint32_t seq_adr);
+#else
+void call_spm(uint8_t csr);
+#endif
 
 FATFS Fatfs;             // Petit-FatFs work area
-BYTE Buff[SPM_PAGESIZE]; // Page data buffer
+BYTE  Buff[SPM_PAGESIZE]; // Page data buffer
 
 #ifdef AS_2NDARY_BOOTLOADER
 xjmp_t app_reset_vector;
@@ -155,7 +165,7 @@ static void check_reset_vector(void)
 		// so we force a rewrite of this vector
 		memset(Buff, 0xFF, SPM_PAGESIZE); // Clear buffer
 		(*((xjmp_t*)Buff)) = tmp1;
-		flash_write(0, Buff);
+		flash_write_page(0, Buff);
 	}
 }
 
@@ -216,45 +226,45 @@ static char can_jump(void)
 	return 1;
 }
 
-void flash_write(uint32_t adr, uint8_t* dat)
+void flash_write_page(addr_t adr, const uint8_t* dat)
 {
-	// I replaced the old flash_write from asmfunc.S with this version
-	// because the old version didn't seem to work
-	// I was hoping that this avr-libc implementation would be safer and more portable
-	// but it still doesn't work
-
+	#ifdef FORCE_USE_LIBC_BOOT_FUNCS
 	boot_spm_busy_wait();
-	boot_rww_enable();
 	boot_page_erase(adr);
 	boot_spm_busy_wait();
+	#else
+	flash_erase_call(adr);
+	#endif
+	#if defined(ENABLE_DEBUG) || defined(FORCE_USE_LIBC_BOOT_FUNCS)
 	uint32_t i;
 	uint16_t j;
 	for (i = adr, j = 0; j < SPM_PAGESIZE; i += 2, j += 2) {
 		#ifdef ENABLE_DEBUG
 		// validate that the erase worked
-		uint16_t r;
-		#if (BOOT_ADR > USHRTMAX)
-			r = pgm_read_word_far(i);
-		#else
-			r = pgm_read_word(i);
-		#endif
+		uint16_t r = pgm_read_word_at(i);
 		if (r != 0xFFFF) {
 			dbg_printf("flash erase failed at 0x%04X%04X, data 0x%04X\r\n", ((uint16_t*)&i)[1], ((uint16_t*)&i)[0], r);
 		}
 		#endif
+		#ifdef FORCE_USE_LIBC_BOOT_FUNCS
 		boot_page_fill(i, *((uint16_t*)(&dat[j])));
+		#endif
 	}
+	#endif
+	#ifdef FORCE_USE_LIBC_BOOT_FUNCS
 	boot_page_write(adr);
 	boot_spm_busy_wait();
+	boot_rww_enable();
+	boot_spm_busy_wait();
+	#else
+	flash_write_call(adr, dat);
+	#endif
 
 	#ifdef ENABLE_DEBUG
+	// validate every byte
 	for (i = adr, j = 0; j < SPM_PAGESIZE; i += 2, j += 2) {
 		uint16_t r, m;
-		#if (BOOT_ADR > USHRTMAX)
-			r = pgm_read_word_far(i);
-		#else
-			r = pgm_read_word(i);
-		#endif
+		r = pgm_read_word_at(i);
 		m = *((uint16_t*)(&dat[j]));
 		if (r != m) {
 			dbg_printf("flash verification failed at 0x%04X%04X, read 0x%04X, should be 0x%04X\r\n", ((uint16_t*)&i)[1], ((uint16_t*)&i)[0], r, m);
@@ -289,6 +299,8 @@ int main (void)
 	#ifdef AS_2NDARY_BOOTLOADER
 	char end_of_file = 0;
 
+	char can_write = try_scan_for_spm() != 0;
+
 	check_reset_vector();
 	#endif
 
@@ -297,6 +309,11 @@ int main (void)
 	// prepare LED
 	LED_DDRx |= _BV(LED_BIT); // pin as output
 	LED_OFF();
+
+	if (!can_write && canjump) {
+		dbg_printf("can jump, but can't write to flash, launching app\r\n");
+		start_app();
+	}
 
 	if (canjump)
 	{
@@ -443,13 +460,7 @@ int main (void)
 
 			for (i = 0; i < SPM_PAGESIZE && to_write == 0; i++)
 			{ // check if the page has differences
-				if (
-					#if (BOOT_ADR > USHRT_MAX)
-						pgm_read_byte_far(i)
-					#else
-						pgm_read_byte(i)
-					#endif
-						!= Buff[i])
+				if (pgm_read_byte_at(fa) != Buff[i])
 				{
 					to_write = 1;
 				}
@@ -465,7 +476,7 @@ int main (void)
 		if (to_write) // write only if required
 		{
 			LED_TOG(); // blink the LED while writing
-			flash_write(fa, Buff);
+			flash_write_page(fa, Buff);
 			bw += br;
 			dbg_printf("bytes written: %d\r\n", bw);
 		}
