@@ -146,7 +146,11 @@ static void check_reset_vector(void)
 	tmp2 = pgm_read_xjmp(0);
 	if (tmp2 != tmp1)
 	{
-		dbg_printf("reset vector requires overwrite, read 0x%08X, should be 0x%08X\r\n", tmp2, tmp1);
+		#ifdef ENABLE_DEBUG
+		uint16_t* tmp1p = (uint16_t*)&tmp1;
+		uint16_t* tmp2p = (uint16_t*)&tmp2;
+		dbg_printf("reset vector requires overwrite, read 0x%04X%04X, should be 0x%04X%04X\r\n", tmp2p[1], tmp2p[0], tmp1p[1], tmp1p[0]);
+		#endif
 		// this means existing flash will not activate the bootloader
 		// so we force a rewrite of this vector
 		memset(Buff, 0xFF, SPM_PAGESIZE); // Clear buffer
@@ -188,18 +192,23 @@ static char can_jump(void)
 	#ifdef AS_2NDARY_BOOTLOADER
 	check_reset_vector();
 	xjmp_t tmpx = pgm_read_xjmp(BOOT_ADR - sizeof(xjmp_t));
+	// check if trampoline exists
 	#ifdef VECTORS_USE_JMP
-	if ((tmpx & 0xFFFF) == 0xFFFF || (tmpx & 0xFFFF) == 0x0000 || tmpx == make_jmp(BOOT_ADR))
+	if ((tmpx & 0xFFFF) == 0xFFFF || (tmpx & 0xFFFF) == 0x0000 || tmpx == make_jmp(BOOT_ADR)) {
+		#ifdef ENABLE_DEBUG
+		uint16_t* tmpxp = (uint16_t*)&tmpx;
+		dbg_printf("trampoline missing, read 0x%04X%04X\r\n", tmpxp[1], tmpxp[0]);
+		#endif
 	#elif defined(VECTORS_USE_RJMP)
-	if (tmpx == 0xFFFF || tmpx == 0x0000 || tmpx == make_rjmp(0, BOOT_ADR))
+	if (tmpx == 0xFFFF || tmpx == 0x0000 || tmpx == make_rjmp(0, BOOT_ADR)) {
 	#endif
-	{
-		// jump into user app is missing
 		return 0;
 	}
 	#else
+	// check if user app is blank
 	uint16_t tmp16 = pgm_read_word_near(0);
 	if (tmp16 == 0xFFFF || tmp16 == 0x0000) {
+		dbg_printf("user app missing, read 0x%04X\r\n", tmp16);
 		return 0;
 	}
 	#endif
@@ -221,10 +230,37 @@ void flash_write(uint32_t adr, uint8_t* dat)
 	uint32_t i;
 	uint16_t j;
 	for (i = adr, j = 0; j < SPM_PAGESIZE; i += 2, j += 2) {
+		#ifdef ENABLE_DEBUG
+		// validate that the erase worked
+		uint16_t r;
+		#if (BOOT_ADR > USHRTMAX)
+			r = pgm_read_word_far(i);
+		#else
+			r = pgm_read_word(i);
+		#endif
+		if (r != 0xFFFF) {
+			dbg_printf("flash erase failed at 0x%04X%04X, data 0x%04X\r\n", ((uint16_t*)&i)[1], ((uint16_t*)&i)[0], r);
+		}
+		#endif
 		boot_page_fill(i, *((uint16_t*)(&dat[j])));
 	}
 	boot_page_write(adr);
 	boot_spm_busy_wait();
+
+	#ifdef ENABLE_DEBUG
+	for (i = adr, j = 0; j < SPM_PAGESIZE; i += 2, j += 2) {
+		uint16_t r, m;
+		#if (BOOT_ADR > USHRTMAX)
+			r = pgm_read_word_far(i);
+		#else
+			r = pgm_read_word(i);
+		#endif
+		m = *((uint16_t*)(&dat[j]));
+		if (r != m) {
+			dbg_printf("flash verification failed at 0x%04X%04X, read 0x%04X, should be 0x%04X\r\n", ((uint16_t*)&i)[1], ((uint16_t*)&i)[0], r, m);
+		}
+	}
+	#endif
 }
 
 int main (void)
@@ -285,12 +321,29 @@ int main (void)
 		dbg_printf("forced to boot from card\r\n");
 	}
 
+	FRESULT fres;
+	#ifdef ENABLE_DEBUG
+	fres = 
+	#endif
 	pf_mount(&Fatfs); // Initialize file system
-	if (pf_open("app.bin") != FR_OK) // Open application file
+	#ifdef ENABLE_DEBUG
+	if (fres == FR_OK)
 	{
-		dbg_printf("file failed to open\r\n");
+	#endif
+		fres = pf_open("APP.BIN");
+		if (fres != FR_OK) // Open application file
+		{
+			dbg_printf("file failed to open, err 0x%02X\r\n", fres);
+			start_app();
+		}
+	#ifdef ENABLE_DEBUG
+	}
+	else
+	{
+		dbg_printf("card mount failed, err 0x%02X\r\n", fres);
 		start_app();
 	}
+	#endif
 
 	LED_ON();
 
@@ -391,10 +444,10 @@ int main (void)
 			for (i = 0; i < SPM_PAGESIZE && to_write == 0; i++)
 			{ // check if the page has differences
 				if (
-					#if (FLASHEND > USHRT_MAX)
+					#if (BOOT_ADR > USHRT_MAX)
 						pgm_read_byte_far(i)
 					#else
-						pgm_read_byte_far(i)
+						pgm_read_byte(i)
 					#endif
 						!= Buff[i])
 				{
