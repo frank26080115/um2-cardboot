@@ -126,107 +126,23 @@ xmit_spi:
 	ret
 .endfunc
 
-
-#ifndef FORCE_USE_LIBC_BOOT_FUNCS
-
-;---------------------------------------------------------------------------
-; Erase a flash page
-;
-; void flash_erase (DWORD flash_addr);
-
-.global flash_erase
-.func flash_erase
-flash_erase:
-
-	movw	ZL, r22
-#if FLASHEND >= 0x10000
-	out	_SFR_IO_ADDR(RAMPZ), r24
-#endif
-
-	; Initiate erase operation
-	ldi	r24, 0b00000011
-#ifndef AS_2NDARY_BOOTLOADER
-	sts	_SFR_MEM_ADDR(SPMCSR), r24
-	spm
-#else
-	rcall call_spm
-#endif
-
-#ifndef AS_2NDARY_BOOTLOADER
-	; Wait for end of erase operation
-1:	lds		r24, _SFR_MEM_ADDR(SPMCSR)
-	sbrc	r24, 0
-	rjmp	1b
-#endif
-
-	ret
+; this only exists as a backup mechanism, in case the app region needs to utilize SPM
+.global	call_spm
+.func	call_spm
+; make sure r24 contains whatever you want for SPMCSR first
+; and make sure the stack pointer has the correct return address
+call_spm:	sts		_SFR_MEM_ADDR(SPMCSR), r24
+; remember that spm must be called within 4 cycles of writing SPMCSR
+			spm
+wait_spm_1:	lds		r24, _SFR_MEM_ADDR(SPMCSR)
+			sbrc	r24, 0
+			rjmp	wait_spm_1
+			; Re-enable read access to the flash
+reen_rww:	ldi	r24, 0b00010001
+			sts		_SFR_MEM_ADDR(SPMCSR), r24
+			spm
+wait_spm_2:	lds		r24, _SFR_MEM_ADDR(SPMCSR)
+			sbrc	r24, 0
+			rjmp	wait_spm_2
+			ret
 .endfunc
-
-
-
-;---------------------------------------------------------------------------
-; Write a flash page
-;
-; void flash_write (DWORD flash_addr, const BYTE* data);
-
-.global flash_write
-.func flash_write
-flash_write:
-	push	r0
-	push	r1
-
-#if FLASHEND >= 0x10000
-	out	_SFR_IO_ADDR(RAMPZ), r24
-#endif
-
-	; Fill page buffer
-	movw	ZL, r22
-	movw	XL, r20
-	ldi	r25, lo8(SPM_PAGESIZE/2)
-1:	ld	r0, X+
-	ld	r1, X+
-	ldi	r24, 0b00000001
-#ifndef AS_2NDARY_BOOTLOADER
-	sts	_SFR_MEM_ADDR(SPMCSR), r24
-	spm
-#else
-	push	ZL
-	rcall	call_spm
-	pop		ZL
-#endif
-	adiw	ZL, 2
-	dec	r25
-	brne	1b
-
-	; Initiate write operation
-	movw	ZL, r22
-	ldi	r24, 0b00000101
-#ifndef AS_2NDARY_BOOTLOADER
-	sts	_SFR_MEM_ADDR(SPMCSR), r24
-	spm
-#else
-	rcall call_spm
-#endif
-
-#ifndef AS_2NDARY_BOOTLOADER
-	; Wait for end of write operation
-2:	lds		r24, _SFR_MEM_ADDR(SPMCSR)
-	sbrc	r24, 0
-	rjmp	2b
-#endif
-
-	; Re-enable read access to the flash
-	ldi	r24, 0b00010001
-#ifndef AS_2NDARY_BOOTLOADER
-	sts	_SFR_MEM_ADDR(SPMCSR), r24
-	spm
-#else
-	rcall call_spm
-#endif
-
-	pop	r1
-	pop	r0
-	ret
-.endfunc
-
-#endif

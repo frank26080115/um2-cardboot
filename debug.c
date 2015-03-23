@@ -29,55 +29,17 @@ int ser_putch(uint8_t c, FILE* s) {
 
 FILE ser_stdout = FDEV_SETUP_STREAM(ser_putch, NULL, _FDEV_SETUP_WRITE);
 
-static char     irq_enabled;
-static uint8_t  ucsrna_cache;
-static uint8_t  ucsrnb_cache;
-static uint8_t  ucsrnc_cache;
-static uint16_t ubrrn_cache;
-
 #endif
 
 #ifdef ENABLE_DEBUG
 void dbg_init(void)
 {
-	/*
-	Ultimaker2's primary bootloader uses weird settings, and the app FW depends on the same settings already being set
-	this means the settings must be saved, and then restored later
-	*/
-
-	ucsrna_cache = UCSRnA;
-	ucsrnb_cache = UCSRnB;
-	ucsrnc_cache = UCSRnC;
-	ubrrn_cache = UBRRn;
-	UCSRnB = 0;
-	UCSRnA = 0;
-	UCSRnC = 0;
-
-	irq_enabled = bit_is_set(SREG, 7);
-
-	cli(); // not sure if primary bootloader activated interrupts
-	SER_PIN_DDRx |= _BV(SER_PIN_NUM); // TX pin as output
-	UBRRn = 207; // 4800 baud at 16MHz
-	// if the primary bootloader did set the baud, that baud will be used instead
-	UCSRnC = (1 << UCSZn1) | (1 << UCSZn0);
-	UCSRnB = _BV(TXENn) | _BV(RXENn);
+	// assume STK500v2 code already initialized UART
 }
 
 void dbg_deinit(void)
 {
-	loop_until_bit_is_set(UCSRnA, UDREn);
-
-	UCSRnB = 0;
-	UCSRnA = 0;
-	UCSRnC = 0;
-	UBRRn  = ubrrn_cache;
-	UCSRnA = ucsrna_cache;
-	UCSRnC = ucsrnc_cache;
-	UCSRnB = ucsrnb_cache;
-
-	if (irq_enabled) {
-		sei();
-	}
+	
 }
 
 #ifdef EXTEND_PSTR
