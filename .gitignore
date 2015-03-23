@@ -1,8 +1,17 @@
+*.disasm
+*.bin
+*.map
+*.lst
+*.lss
+*.eep
+*.atsuo
+
 # Object files
 *.o
 *.ko
 *.obj
 *.elf
+*.d
 
 # Precompiled Headers
 *.gch
@@ -26,7 +35,6 @@
 *.app
 *.i*86
 *.x86_64
-*.hex
 
 # =========================
 # Operating System Files
