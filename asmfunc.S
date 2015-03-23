@@ -149,30 +149,17 @@ flash_erase:
 	sts	_SFR_MEM_ADDR(SPMCSR), r24
 	spm
 #else
-#ifndef SPM_SEQ_ADR
-	movw r22, r20
-	movw r20, r18
-#endif
 	rcall call_spm
 #endif
 
 #ifndef AS_2NDARY_BOOTLOADER
 	; Wait for end of erase operation
-1:	lds	r24, _SFR_MEM_ADDR(SPMCSR)
+1:	lds		r24, _SFR_MEM_ADDR(SPMCSR)
 	sbrc	r24, 0
 	rjmp	1b
 #endif
 
-	; Re-enable read access to the flash
-	ldi	r24, 0b00010001
-#ifndef AS_2NDARY_BOOTLOADER
-	sts	_SFR_MEM_ADDR(SPMCSR), r24
-	spm
-#else
-	rcall call_spm
-#endif
-
-9:	ret
+	ret
 .endfunc
 
 
@@ -203,11 +190,9 @@ flash_write:
 	sts	_SFR_MEM_ADDR(SPMCSR), r24
 	spm
 #else
-	push	r22
-	movw	r22, r18
-	movw	r20, r16
-	rcall call_spm
-	pop		r22
+	push	ZL
+	rcall	call_spm
+	pop		ZL
 #endif
 	adiw	ZL, 2
 	dec	r25
@@ -220,13 +205,12 @@ flash_write:
 	sts	_SFR_MEM_ADDR(SPMCSR), r24
 	spm
 #else
-	movw	r22, r18
 	rcall call_spm
 #endif
 
 #ifndef AS_2NDARY_BOOTLOADER
 	; Wait for end of write operation
-2:	lds	r24, _SFR_MEM_ADDR(SPMCSR)
+2:	lds		r24, _SFR_MEM_ADDR(SPMCSR)
 	sbrc	r24, 0
 	rjmp	2b
 #endif
@@ -240,7 +224,7 @@ flash_write:
 	rcall call_spm
 #endif
 
-9:	pop	r1
+	pop	r1
 	pop	r0
 	ret
 .endfunc

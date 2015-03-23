@@ -73,28 +73,16 @@ write_magic:
 
 	; jump to where the sts and spm and ijmp are located
 	#ifndef AVR_SIMULATION
-	#ifdef SPM_SEQ_ADR
 	#ifdef __AVR_HAVE_JMP_CALL__
 	jmp  SPM_SEQ_ADR
 	#else
 	rjmp SPM_SEQ_ADR
 	#endif
 	#else
-	sts _SFR_MEM_ADDR(EIND), r22
-	movw ZL, r20
-	eijmp
-	#endif
-	#else
-	#ifdef SPM_SEQ_ADR
 	#ifdef __AVR_HAVE_JMP_CALL__
 	jmp  fake_spm_seq_func
 	#else
 	rjmp fake_spm_seq_func
-	#endif
-	#else
-	sts _SFR_MEM_ADDR(EIND), r22
-	movw ZL, r20
-	eijmp
 	#endif
 	#endif
 

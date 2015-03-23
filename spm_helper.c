@@ -32,15 +32,17 @@ addr_t scan_for_spm(void)
 	for (i = BOOT_ADR; i < FLASHEND; i++)
 	#endif
 	{
-		for (j = 0; j < 3; j++) {
+		for (j = 0; j < 3; j++)
+		{
 			buf[j] = pgm_read_dword_at(i + (j * sizeof(uint32_t)));
-		}
-		if (buf[0] == match[0] &&
-			buf[1] == match[1] &&
-			buf[2] == match[2]) {
-			dbg_printf("SPM sequence found at 0x%04X%04X\r\n", ((uint16_t*)&i)[1], ((uint16_t*)&i)[0]);
-			// this address *should* be at 0x0003FC48
-			return i;
+			if (buf[j] != match[j]) {
+				break;
+			}
+			if (j == 2) {
+				dbg_printf("SPM sequence found at 0x%04X%04X\r\n", ((uint16_t*)&i)[1], ((uint16_t*)&i)[0]);
+				// this address *should* be at 0x0003FC48
+				return i / 2;
+			}
 		}
 	}
 	dbg_printf("unable to find SPM sequence\r\n");

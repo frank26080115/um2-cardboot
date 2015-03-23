@@ -62,6 +62,7 @@
 #include <avr/io.h>
 #include <avr/pgmspace.h>
 #include <avr/boot.h>
+#include <avr/wdt.h>
 #include <util/delay.h>
 #include <string.h>
 #include "pff.h"
@@ -70,17 +71,8 @@
 void dly_100us(void); // from asmfunc.S
 static void start_app(void);
 void flash_write_page(addr_t adr, const uint8_t* dat); // a wrapper
-#if defined(AS_2NDARY_BOOTLOADER) && defined(SCAN_FOR_SPM_SEQUENCE)
-void    flash_erase(DWORD flash_addr, addr_t seq_adr);
-#define flash_erase_call(x) flash_erase(x, spm_seq_addr)
-void    flash_write(DWORD flash_addr, const BYTE* data, addr_t seq_adr);
-#define flash_write_call(x, y) flash_write(x, y, spm_seq_addr)
-#else
-void    flash_erase(DWORD flash_addr);
-#define flash_erase_call(x) flash_erase(x)
-void    flash_write(DWORD flash_addr, const BYTE* data);
-#define flash_write_call(x, y) flash_write(x, y)
-#endif
+void flash_erase(DWORD flash_addr);
+void flash_write(DWORD flash_addr, const BYTE* data);
 
 #ifdef AVR_SIMULATION
 void fake_spm_seq_func(void); // only put here so it is not garbage collected
@@ -90,12 +82,9 @@ void fake_spm_seq_func(void); // only put here so it is not garbage collected
 extern addr_t spm_seq_addr;
 addr_t scan_for_spm(void);
 addr_t try_scan_for_spm(void);
-void call_spm(uint8_t csr, uint32_t seq_adr);
-#else
-void call_spm(uint8_t csr);
 #endif
 
-FATFS Fatfs;             // Petit-FatFs work area
+FATFS Fatfs;              // Petit-FatFs work area
 BYTE  Buff[SPM_PAGESIZE]; // Page data buffer
 
 #ifdef AS_2NDARY_BOOTLOADER
@@ -160,11 +149,7 @@ static void check_reset_vector(void)
 	tmp2 = pgm_read_xjmp(0);
 	if (tmp2 != tmp1)
 	{
-		#ifdef ENABLE_DEBUG
-		uint16_t* tmp1p = (uint16_t*)&tmp1;
-		uint16_t* tmp2p = (uint16_t*)&tmp2;
-		dbg_printf("reset vector requires overwrite, read 0x%04X%04X, should be 0x%04X%04X\r\n", tmp2p[1], tmp2p[0], tmp1p[1], tmp1p[0]);
-		#endif
+		dbg_printf("reset vector requires overwrite, read 0x%04X%04X, should be 0x%04X%04X\r\n", ((uint16_t*)&tmp2)[1], ((uint16_t*)&tmp2)[0], ((uint16_t*)&tmp1)[1], ((uint16_t*)&tmp1)[0]);
 		// this means existing flash will not activate the bootloader
 		// so we force a rewrite of this vector
 		memset(Buff, 0xFF, SPM_PAGESIZE); // Clear buffer
@@ -209,12 +194,10 @@ static char can_jump(void)
 	// check if trampoline exists
 	#ifdef VECTORS_USE_JMP
 	if ((tmpx & 0xFFFF) == 0xFFFF || (tmpx & 0xFFFF) == 0x0000 || tmpx == make_jmp(BOOT_ADR)) {
-		#ifdef ENABLE_DEBUG
-		uint16_t* tmpxp = (uint16_t*)&tmpx;
-		dbg_printf("trampoline missing, read 0x%04X%04X\r\n", tmpxp[1], tmpxp[0]);
-		#endif
+		dbg_printf("trampoline missing, read 0x%04X%04X\r\n", ((uint16_t*)&tmpx)[1], ((uint16_t*)&tmpx)[0]);
 	#elif defined(VECTORS_USE_RJMP)
 	if (tmpx == 0xFFFF || tmpx == 0x0000 || tmpx == make_rjmp(0, BOOT_ADR)) {
+		dbg_printf("trampoline missing, read 0x%04X\r\n", tmpx);
 	#endif
 		return 0;
 	}
@@ -237,7 +220,7 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 	boot_page_erase(adr);
 	boot_spm_busy_wait();
 	#else
-	flash_erase_call(adr);
+	flash_erase(adr);
 	#endif
 	#if defined(ENABLE_DEBUG) || defined(FORCE_USE_LIBC_BOOT_FUNCS)
 	uint32_t i;
@@ -261,7 +244,7 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 	boot_rww_enable();
 	boot_spm_busy_wait();
 	#else
-	flash_write_call(adr, dat);
+	flash_write(adr, dat);
 	#endif
 
 	#ifdef ENABLE_DEBUG
@@ -279,6 +262,7 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 
 int main (void)
 {
+	wdt_disable();
 	#ifdef ENABLE_DEBUG
 	dbg_init();
 	_delay_ms(100);
@@ -305,6 +289,12 @@ int main (void)
 
 	#ifdef SCAN_FOR_SPM_SEQUENCE
 	char can_write = try_scan_for_spm() != 0;
+	if (can_write && spm_seq_addr != (SPM_SEQ_ADR / 2)) {
+		dbg_printf("SPM seq addr not matching\r\n");
+		#ifndef AVR_SIMULATION
+			can_write = 0;
+		#endif
+	}
 	#endif
 
 	check_reset_vector();

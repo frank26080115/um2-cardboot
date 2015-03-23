@@ -22,9 +22,19 @@ LIBS        =
 DEBUG       = dwarf-2
 
 ifdef AS_2NDARY_BOOTLOADER
+ARD_MEGA_2560_BOOT_FILE = arduinomega2560bootloaderdump
+SPM_SEQ_SRCH_CMD = grep -E "(sts\s+0x0057,\s+r24)|(spm)|(eor\s+r3[01],\s+r3[01])|(ijmp)" < $< | tr '\r' ' ' | tr '\n' ' ' | sed -n -r "s/.*?\s+([0-9a-fA-F]+):\s+sts\s+0x0057,\s+r24\s+[0-9a-fA-F]+:\s+spm\s+[0-9a-fA-F]+:\s+eor\s+r30,\s+r30\s+[0-9a-fA-F]+:\s+eor\s+r31,\s+r31\s+[0-9a-fA-F]+:\s+ijmp.*?/\U\1/p"
+
 DEFS += -DAS_2NDARY_BOOTLOADER
 DEFS += -DMAGIC_1=0x4D -DMAGIC_2=0x61 -DMAGIC_3=0x67 -DMAGIC_4=0x69
-DEFS += -DSPM_SEQ_ADR=0x0003FC48
+DEFS += -include spm_seq_adr.h
+
+OPTIONAL_REQUIRED += spm_seq_adr.h
+
+spm_seq_adr.h: $(ARD_MEGA_2560_BOOT_FILE).disasm
+	@echo "SPM seq found: $(shell $(SPM_SEQ_SRCH_CMD) < $<)"
+	@printf "#ifndef _SPM_SEQ_ADR_H_\r\n#define _SPM_SEQ_ADR_H_\r\n#define SPM_SEQ_ADR 0x$(shell $(SPM_SEQ_SRCH_CMD)\ <$<)\r\n#endif" > $@
+
 endif
 
 ifdef ENABLE_DEBUG
@@ -52,6 +62,9 @@ $(TARGET).elf: $(OBJ)
 
 clean: cleanmerged cleanartifacts
 	rm -rf $(TARGET).hex
+ifdef AS_2NDARY_BOOTLOADER
+	rm -rf spm_seq_adr.h $(ARD_MEGA_2560_BOOT_FILE).disasm
+endif
 
 cleanartifacts: cleanmergedartifacts
 	rm -rf *.o $(TARGET).elf *.eps *.bak *.a
@@ -64,7 +77,10 @@ lst:  $(TARGET).lst
 %.lst: %.elf
 	$(OBJDUMP) -h -S $< > $@
 
-%.o : %.S
+%.o: %.c $(OPTIONAL_REQUIRED)
+	$(CC) -c $(CFLAGS) $< -o $@
+
+%.o: %.S $(OPTIONAL_REQUIRED)
 	$(CC) -c $(ALL_ASFLAGS) $< -o $@
 
 text: $(TARGET).hex
