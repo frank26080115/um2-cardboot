@@ -82,6 +82,10 @@ void    flash_write(DWORD flash_addr, const BYTE* data);
 #define flash_write_call(x, y) flash_write(x, y)
 #endif
 
+#ifdef AVR_SIMULATION
+void fake_spm_seq_func(void); // only put here so it is not garbage collected
+#endif
+
 #ifdef SCAN_FOR_SPM_SEQUENCE
 extern addr_t spm_seq_addr;
 addr_t scan_for_spm(void);
@@ -299,7 +303,9 @@ int main (void)
 	#ifdef AS_2NDARY_BOOTLOADER
 	char end_of_file = 0;
 
+	#ifdef SCAN_FOR_SPM_SEQUENCE
 	char can_write = try_scan_for_spm() != 0;
+	#endif
 
 	check_reset_vector();
 	#endif
@@ -310,10 +316,12 @@ int main (void)
 	LED_DDRx |= _BV(LED_BIT); // pin as output
 	LED_OFF();
 
+	#ifdef SCAN_FOR_SPM_SEQUENCE
 	if (!can_write && canjump) {
 		dbg_printf("can jump, but can't write to flash, launching app\r\n");
 		start_app();
 	}
+	#endif
 
 	if (canjump)
 	{
@@ -535,5 +543,9 @@ static void start_app(void)
 		#else
 			asm volatile("rjmp 0000");
 		#endif
+	#endif
+
+	#ifdef AVR_SIMULATION
+	fake_spm_seq_func(); // only put here so it is not garbage collected
 	#endif
 }

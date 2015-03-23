@@ -39,6 +39,12 @@ call_spm:
 ; r24 is also the first parameter of this function
 ; no move required
 
+; force erase magic word
+	ldi r16, 0
+	ldi r17, 0
+	ldi r18, 0
+	ldi r19, 0
+
 ; this stores the PC to the stack
 	rcall	check_magic_2
 
@@ -66,6 +72,7 @@ write_magic:
 	ldi r19, MAGIC_4
 
 	; jump to where the sts and spm and ijmp are located
+	#ifndef AVR_SIMULATION
 	#ifdef SPM_SEQ_ADR
 	#ifdef __AVR_HAVE_JMP_CALL__
 	jmp  SPM_SEQ_ADR
@@ -77,6 +84,19 @@ write_magic:
 	movw ZL, r20
 	eijmp
 	#endif
+	#else
+	#ifdef SPM_SEQ_ADR
+	#ifdef __AVR_HAVE_JMP_CALL__
+	jmp  fake_spm_seq_func
+	#else
+	rjmp fake_spm_seq_func
+	#endif
+	#else
+	sts _SFR_MEM_ADDR(EIND), r22
+	movw ZL, r20
+	eijmp
+	#endif
+	#endif
 
 exit_call_spm:
 	pop		r19
@@ -86,3 +106,14 @@ exit_call_spm:
 	ret
 .endfunc
 
+#ifdef AVR_SIMULATION
+.global fake_spm_seq_func
+.func fake_spm_seq_func
+fake_spm_seq_func:
+	sts _SFR_MEM_ADDR(SPMCSR), r24
+	spm
+	eor	r30, r30
+	eor	r31, r31
+	ijmp
+.endfunc
+#endif

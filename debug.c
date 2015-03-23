@@ -37,10 +37,9 @@ static uint16_t ubrrn_cache;
 
 #endif
 
+#ifdef ENABLE_DEBUG
 void dbg_init(void)
 {
-	#ifdef ENABLE_DEBUG
-
 	/*
 	Ultimaker2's primary bootloader uses weird settings, and the app FW depends on the same settings already being set
 	this means the settings must be saved, and then restored later
@@ -62,14 +61,10 @@ void dbg_init(void)
 	// if the primary bootloader did set the baud, that baud will be used instead
 	UCSRnC = (1 << UCSZn1) | (1 << UCSZn0);
 	UCSRnB = _BV(TXENn) | _BV(RXENn);
-
-	#endif
 }
 
 void dbg_deinit(void)
 {
-	#ifdef ENABLE_DEBUG
-
 	loop_until_bit_is_set(UCSRnA, UDREn);
 
 	UCSRnB = 0;
@@ -83,7 +78,6 @@ void dbg_deinit(void)
 	if (irq_enabled) {
 		sei();
 	}
-	#endif
 }
 
 #ifdef EXTEND_PSTR
@@ -120,4 +114,5 @@ int dbg_printf_P(const PROGMEM char* __pfmt, ...)
 
 	return r;
 }
+#endif
 #endif
