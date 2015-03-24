@@ -14,7 +14,7 @@ BOOT_ADR     = 0x3E000
 TARGET      = um2_cardboot
 CSRC        = cardboot.c stk500boot.c pff.c mmcbbp.c
 ASRC        = asmfunc.S
-OPTIMIZE    = -Os -mcall-prologues -mrelax -ffunction-sections -fpack-struct -fshort-enums -fno-move-loop-invariants -fno-tree-scev-cprop -fno-inline-small-functions
+OPTIMIZE    = -Os -ffunction-sections -fpack-struct -fshort-enums -fno-move-loop-invariants -fno-inline-small-functions -mcall-prologues -mrelax -fno-tree-scev-cprop -fno-jump-tables
 DEFS        = -DBOOT_ADR=$(BOOT_ADR) -DF_CPU=$(F_CPU) -D_BOARD_$(BOARD)_
 LIBS        =
 DEBUG       = dwarf-2

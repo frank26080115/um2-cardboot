@@ -33,7 +33,6 @@ See comments inside dbg_printf_P for solution
 	#define dbg_init()
 	#define dbg_deinit()
 	#define dbg_printf(fmt, args...)
-	#define ser_putch(a, b)
 #endif
 
 #endif

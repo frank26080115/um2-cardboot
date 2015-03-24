@@ -80,7 +80,7 @@ LICENSE:
 //*	Jul  8,	2010	<MLS> Adding monitor code
 //*	Jul 11,	2010	<MLS> Added blinking LED while waiting for download to start
 //*	Jul 11,	2010	<MLS> Added EEPROM test
-//*	Jul 29,	2010	<MLS> Added recchar_timeout for timing out on bootloading
+//*	Jul 29,	2010	<MLS> Added ser_readch_timeout for timing out on bootloading
 //*	Aug 23,	2010	<MLS> Added support for atmega2561
 //*	Aug 26,	2010	<MLS> Removed support for BOOT_BY_SWITCH
 //*	Sep  8,	2010	<MLS> Added support for atmega16
@@ -111,12 +111,15 @@ LICENSE:
 #include	<avr/interrupt.h>
 #include	<avr/boot.h>
 #include	<avr/pgmspace.h>
+#include	<avr/wdt.h>
+#include	<avr/sfr_defs.h>
 #include	<util/delay.h>
 #include	<avr/eeprom.h>
 #include	<avr/common.h>
 #include	<stdlib.h>
 #include	"stk500v2_cmd.h"
 #include	"main.h"
+#include	"debug.h"
 
 #ifndef EEWE
 	#define EEWE    1
@@ -124,10 +127,6 @@ LICENSE:
 #ifndef EEMWE
 	#define EEMWE   2
 #endif
-
-//#define	_DEBUG_SERIAL_
-//#define	_DEBUG_WITH_LEDS_
-
 
 /*
  * Uncomment the following lines to save code space
@@ -137,57 +136,9 @@ LICENSE:
 //#define	REMOVE_CMD_SPI_MULTI				// disable processing of SPI_MULTI commands, Remark this line for AVRDUDE <Worapoht>
 //
 
-
-
-//************************************************************************
-//*	LED on pin "PROGLED_PIN" on port "PROGLED_PORT"
-//*	indicates that bootloader is active
-//*	PG2 -> LED on Wiring board
-//************************************************************************
 //#define		BLINK_LED_WHILE_WAITING
 
-#ifdef _MEGA_BOARD_
-	#define PROGLED_PORT	PORTB
-	#define PROGLED_DDR		DDRB
-	#define PROGLED_PIN		PINB7
-#elif defined( _BOARD_ULTIMAKER2_ )
-	#define PROGLED_PORT	PORTH
-	#define PROGLED_DDR		DDRH
-	#define PROGLED_PIN		PINH5
-#else
-	#define PROGLED_PORT	PORTG
-	#define PROGLED_DDR		DDRG
-	#define PROGLED_PIN		PING2
-#endif
-
-
-
-/*
- * define CPU frequency in Mhz here if not defined in Makefile
- */
-#ifndef F_CPU
-	#define F_CPU 16000000UL
-#endif
-
 #define	_BLINK_LOOP_COUNT_	(F_CPU / 2250)
-/*
- * UART Baudrate, AVRStudio AVRISP only accepts 115200 bps
- */
-
-#ifndef BAUDRATE
-	#define BAUDRATE 115200
-#endif
-
-/*
- *  Enable (1) or disable (0) USART double speed operation
- */
-#ifndef UART_BAUDRATE_DOUBLE_SPEED
-	#if defined (__AVR_ATmega32__)
-		#define UART_BAUDRATE_DOUBLE_SPEED 0
-	#else
-		#define UART_BAUDRATE_DOUBLE_SPEED 1
-	#endif
-#endif
 
 /*
  * HW and SW version, reported to AVRISP, must match version of AVRStudio
@@ -209,60 +160,6 @@ LICENSE:
 	#error "no signature definition for MCU available"
 #endif
 
-#if defined(__AVR_ATmega64__) || defined(__AVR_ATmega128__) || defined(__AVR_ATmega162__) \
-	 || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) || defined(__AVR_ATmega2561__)
-	/* ATMega with two USART, use UART0 */
-	#define	UART_BAUD_RATE_LOW			UBRR0L
-	#define	UART_STATUS_REG				UCSR0A
-	#define	UART_CONTROL_REG			UCSR0B
-	#define	UART_ENABLE_TRANSMITTER		TXEN0
-	#define	UART_ENABLE_RECEIVER		RXEN0
-	#define	UART_TRANSMIT_COMPLETE		TXC0
-	#define	UART_RECEIVE_COMPLETE		RXC0
-	#define	UART_DATA_REG				UDR0
-	#define	UART_DOUBLE_SPEED			U2X0
-#elif defined(UBRR0L) && defined(UCSR0A) && defined(TXEN0)
-	/* ATMega with two USART, use UART0 */
-	#define	UART_BAUD_RATE_LOW			UBRR0L
-	#define	UART_STATUS_REG				UCSR0A
-	#define	UART_CONTROL_REG			UCSR0B
-	#define	UART_ENABLE_TRANSMITTER		TXEN0
-	#define	UART_ENABLE_RECEIVER		RXEN0
-	#define	UART_TRANSMIT_COMPLETE		TXC0
-	#define	UART_RECEIVE_COMPLETE		RXC0
-	#define	UART_DATA_REG				UDR0
-	#define	UART_DOUBLE_SPEED			U2X0
-#elif defined(UBRRL) && defined(UCSRA) && defined(UCSRB) && defined(TXEN) && defined(RXEN)
-	//* catch all
-	#define	UART_BAUD_RATE_LOW			UBRRL
-	#define	UART_STATUS_REG				UCSRA
-	#define	UART_CONTROL_REG			UCSRB
-	#define	UART_ENABLE_TRANSMITTER		TXEN
-	#define	UART_ENABLE_RECEIVER		RXEN
-	#define	UART_TRANSMIT_COMPLETE		TXC
-	#define	UART_RECEIVE_COMPLETE		RXC
-	#define	UART_DATA_REG				UDR
-	#define	UART_DOUBLE_SPEED			U2X
-#else
-	#error "no UART definition for MCU available"
-#endif
-
-
-
-/*
- * Macro to calculate UBBR from XTAL and baudrate
- */
-#if defined(__AVR_ATmega32__) && UART_BAUDRATE_DOUBLE_SPEED
-	#define UART_BAUD_SELECT(baudRate,xtalCpu) ((xtalCpu / 4 / baudRate - 1) / 2)
-#elif defined(__AVR_ATmega32__)
-	#define UART_BAUD_SELECT(baudRate,xtalCpu) ((xtalCpu / 8 / baudRate - 1) / 2)
-#elif UART_BAUDRATE_DOUBLE_SPEED
-	#define UART_BAUD_SELECT(baudRate,xtalCpu) (((float)(xtalCpu))/(((float)(baudRate))*8.0)-1.0+0.5)
-#else
-	#define UART_BAUD_SELECT(baudRate,xtalCpu) (((float)(xtalCpu))/(((float)(baudRate))*16.0)-1.0+0.5)
-#endif
-
-
 /*
  * States used in the receive state machine
  */
@@ -276,41 +173,35 @@ LICENSE:
 #define	ST_PROCESS		7
 
 /*
- * function prototypes
- */
-static void sendchar(char c);
-static unsigned char recchar(void);
-
-/*
  * since this bootloader is not linked against the avr-gcc crt1 functions,
  * to reduce the code size, we need to provide our own initialization
  */
-void __jumpMain	(void) __attribute__ ((naked)) __attribute__ ((section (".init9")));
-#include <avr/sfr_defs.h>
 
 //#define	SPH_REG	0x3E
 //#define	SPL_REG	0x3D
 
-//*****************************************************************************
+//*
+void __jumpMain	(void) __attribute__ ((naked)) __attribute__ ((section (".init9")));
 void __jumpMain(void)
 {
-//*	July 17, 2010	<MLS> Added stack pointer initialzation
-//*	the first line did not do the job on the ATmega128
+//	July 17, 2010	<MLS> Added stack pointer initialzation
+//	the first line did not do the job on the ATmega128
 
 	asm volatile ( ".set __stack, %0" :: "i" (RAMEND) );
 
-//*	set stack pointer to top of RAM
+//	set stack pointer to top of RAM
 
 	asm volatile ( "ldi	16, %0" :: "i" (RAMEND >> 8) );
-	asm volatile ( "out %0,16" :: "i" (AVR_STACK_POINTER_HI_ADDR) );
+	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_HI_ADDR) );
 
 	asm volatile ( "ldi	16, %0" :: "i" (RAMEND & 0x0ff) );
-	asm volatile ( "out %0,16" :: "i" (AVR_STACK_POINTER_LO_ADDR) );
+	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_LO_ADDR) );
 
 	asm volatile ( "clr __zero_reg__" );									// GCC depends on register r1 set to 0
 	asm volatile ( "out %0, __zero_reg__" :: "I" (_SFR_IO_ADDR(SREG)) );	// set SREG to 0
 	asm volatile ( "jmp main");												// jump to main()
 }
+//*/
 
 
 //*****************************************************************************
@@ -323,133 +214,132 @@ void delay_ms(unsigned int timedelay)
 	}
 }
 
-
-//*****************************************************************************
 /*
- * send single byte to USART, wait until transmission is completed
- */
-static void sendchar(char c)
+This fixes the problem of requiring -D with avrdude
+*/
+static char chipEraseRequested;
+static addr_t eraseAddress;
+static void chip_erase_task(void)
 {
-	UART_DATA_REG	=	c;										// prepare transmission
-	while (!(UART_STATUS_REG & (1 << UART_TRANSMIT_COMPLETE)));	// wait until byte sent
-	UART_STATUS_REG |= (1 << UART_TRANSMIT_COMPLETE);			// delete TXCflag
-}
-
-
-//************************************************************************
-static int	Serial_Available(void)
-{
-	return(UART_STATUS_REG & (1 << UART_RECEIVE_COMPLETE));	// wait for data
-}
-
-
-//*****************************************************************************
-/*
- * Read single byte from USART, block if no data available
- */
-static unsigned char recchar(void)
-{
-	while (!(UART_STATUS_REG & (1 << UART_RECEIVE_COMPLETE)))
+	if (chipEraseRequested)
 	{
-		// wait for data
+		if (eraseAddress < APP_END)
+		{
+			if (boot_rww_busy() == 0) {
+				boot_page_erase(eraseAddress);
+				eraseAddress += SPM_PAGESIZE;
+			}
+		}
+		else
+		{
+			if (boot_rww_busy() == 0) {
+				eraseAddress = 0;
+				chipEraseRequested = 0;
+			}
+		}
 	}
-	return UART_DATA_REG;
+}
+
+//*****************************************************************************
+void ser_putch(unsigned char c)
+{
+	// wait for TX to finish
+	while (bit_is_clear(UCSRnA, UDREn)) {
+		chip_erase_task();
+	}
+	UDRn = c;
+}
+
+unsigned char ser_readch(void)
+{
+	while (bit_is_clear(UCSRnA, RXCn)) {
+		chip_erase_task();
+	}
+	return UDRn;
 }
 
 #define	MAX_TIME_COUNT	(F_CPU >> 1)
-//*****************************************************************************
-static unsigned char recchar_timeout(void)
+unsigned char ser_readch_timeout(void)
 {
-uint32_t count = 0;
+	volatile uint32_t count = 0;
 
-	while (!(UART_STATUS_REG & (1 << UART_RECEIVE_COMPLETE)))
+	while (bit_is_clear(UCSRnA, RXCn))
 	{
 		// wait for data
 		count++;
 		if (count > MAX_TIME_COUNT)
 		{
-			// TODO: app_start();
+			dbg_printf("timeout rx\n");
+			app_start();
 		}
+		chip_erase_task();
 	}
-	return UART_DATA_REG;
+	return UDRn;
 }
-
-//*	for watch dog timer startup
-void app_start(void);
-
 
 //*****************************************************************************
 int main(void)
 {
-	addr_t		address			=	0;
-	addr_t		eraseAddress	=	0;
+	addr_t			address			=	0;
 	unsigned char	msgParseState;
 	unsigned int	ii				=	0;
 	unsigned char	checksum		=	0;
 	unsigned char	seqNum			=	0;
 	unsigned int	msgLength		=	0;
-	unsigned char	msgBuffer[285];
-	unsigned char	c, *p;
-	unsigned char   isLeave = 0;
+	unsigned char*	msgBuffer = (unsigned char*)master_buffer;
+	unsigned char	c;
+	unsigned char*	p;
+	unsigned char	isLeave = 0;
 
 	unsigned long	boot_timeout;
 	unsigned long	boot_timer;
 	unsigned int	boot_state;
 
-	//*	some chips dont set the stack properly
+	chipEraseRequested = 0;
+	eraseAddress = 0;
+
+	//*
+	//	some chips dont set the stack properly
 	asm volatile ( ".set __stack, %0" :: "i" (RAMEND) );
 	asm volatile ( "ldi	16, %0" :: "i" (RAMEND >> 8) );
-	asm volatile ( "out %0,16" :: "i" (AVR_STACK_POINTER_HI_ADDR) );
+	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_HI_ADDR) );
 	asm volatile ( "ldi	16, %0" :: "i" (RAMEND & 0x0ff) );
-	asm volatile ( "out %0,16" :: "i" (AVR_STACK_POINTER_LO_ADDR) );
+	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_LO_ADDR) );
+	//*/
 
 #ifdef _FIX_ISSUE_181_
 	//************************************************************************
-	//*	Dec 29,	2011	<MLS> Issue #181, added watch dog timmer support
+	//*	Dec 29,	2011	<MLS> Issue #181, added watch dog timer support
 	//*	handle the watch dog timer
 	uint8_t	mcuStatusReg;
 	mcuStatusReg	=	MCUSR;
 
 	__asm__ __volatile__ ("cli");
-	__asm__ __volatile__ ("wdr");
 	MCUSR	=	0;
-	WDTCSR	|=	_BV(WDCE) | _BV(WDE);
-	WDTCSR	=	0;
-	__asm__ __volatile__ ("sei");
+	wdt_disable();
 	// check if WDT generated the reset, if so, go straight to app
-	if (mcuStatusReg & _BV(WDRF))
-	{
+	if (mcuStatusReg & _BV(WDRF)) {
 		app_start();
 	}
 	//************************************************************************
 #endif
 
-	boot_timer	=	0;
-	boot_state	=	0;
+	boot_timeout	=	30;
 
-#ifdef BLINK_LED_WHILE_WAITING
-//	boot_timeout	=	 90000;		//*	should be about 4 seconds
-//	boot_timeout	=	170000;
-	boot_timeout	=	 20000;		//*	should be about 1 second
-#else
-	boot_timeout	=	3500000; // 7 seconds , approx 2us per step when optimize "s"
-#endif
 	/*
 	 * Branch to bootloader or application code ?
 	 */
 
 #ifndef REMOVE_BOOTLOADER_LED
-	/* PROG_PIN pulled low, indicate with LED that bootloader is active */
-	PROGLED_DDR		|=	(1<<PROGLED_PIN);
-	PROGLED_PORT	&=	~(1<<PROGLED_PIN);
-//	PROGLED_PORT	|=	(1<<PROGLED_PIN);
+	LED_DDRx	|=	_BV(LED_BIT);
+	LED_OFF();
 
 #ifdef _DEBUG_WITH_LEDS_
 	for (ii=0; ii<3; ii++)
 	{
-		PROGLED_PORT	&=	~(1<<PROGLED_PIN);	// turn LED off
+		LED_OFF();
 		delay_ms(100);
-		PROGLED_PORT	|=	(1<<PROGLED_PIN);	// turn LED on
+		LED_ON();
 		delay_ms(100);
 	}
 #endif
@@ -459,76 +349,57 @@ int main(void)
 	 * Init UART
 	 * set baudrate and enable USART receiver and transmiter without interrupts
 	 */
-#if UART_BAUDRATE_DOUBLE_SPEED
-	UART_STATUS_REG		|=	(1 <<UART_DOUBLE_SPEED);
-#endif
-	UART_BAUD_RATE_LOW	=	UART_BAUD_SELECT(BAUDRATE,F_CPU);
-	UART_CONTROL_REG	=	(1 << UART_ENABLE_RECEIVER) | (1 << UART_ENABLE_TRANSMITTER);
+	UCSRnA = _BV(U2Xn);
+	UBRRn  = 16; // 115200 baud
+	UCSRnC = _BV(USBSn) | _BV(UCSZn1) | _BV(UCSZn0);
+	UCSRnB = _BV(TXENn) | _BV(RXENn);
 
-	asm volatile ("nop");			// wait until port has changed
-
-#ifdef _DEBUG_SERIAL_
-//	delay_ms(500);
-
-	sendchar('s');
-	sendchar('t');
-	sendchar('k');
-//	sendchar('5');
-//	sendchar('0');
-//	sendchar('0');
-	sendchar('v');
-	sendchar('2');
-	sendchar(0x0d);
-	sendchar(0x0a);
-
-	delay_ms(100);
-#endif
+	dbg_printf("\nUM2 Combo Bootloader\n");
 
 	sd_card_boot(); // this will never return if activated
 
-	while (boot_state==0)
+	dbg_printf("STK500v2\n");
+
+	boot_timer	=	0;
+	boot_state	=	0;
+
+	while (boot_state == 0)
 	{
-		while ((!(Serial_Available())) && (boot_state == 0))		// wait for data
+		while (ser_avail() == 0 && (boot_state == 0)) // wait for data
 		{
-			_delay_ms(0.001);
+			delay_ms(100);
 			boot_timer++;
 			if (boot_timer > boot_timeout)
 			{
 				boot_state	=	1; // (after ++ -> boot_state=2 bootloader timeout, jump to main 0x00000 )
 			}
-		#ifdef BLINK_LED_WHILE_WAITING
-			if ((boot_timer % _BLINK_LOOP_COUNT_) == 0)
-			{
-				//*	toggle the LED
-				PROGLED_PORT	^=	(1<<PROGLED_PIN);	// turn LED ON
-			}
-		#endif
+			#ifdef BLINK_LED_WHILE_WAITING
+			LED_TOG();
+			#endif
 		}
 		boot_state++; // ( if boot_state=1 bootloader received byte from UART, enter bootloader mode)
 	}
 
-
-	if (boot_state==1)
+	if (boot_state == 1)
 	{
-		//*	main loop
+		c = UDRn;
+
 		while (!isLeave)
 		{
 			/*
 			 * Collect received bytes to a complete message
 			 */
-			msgParseState	=	ST_START;
+			msgParseState = ST_START;
 			while ( msgParseState != ST_PROCESS )
 			{
-				if (boot_state==1)
+				if (boot_state == 1)
 				{
-					boot_state	=	0;
-					c			=	UART_DATA_REG;
+					boot_state = 0;
 				}
 				else
 				{
-				//	c	=	recchar();
-					c	=	recchar_timeout();
-					
+				//	c	=	ser_readch();
+					c	=	ser_readch_timeout();
 				}
 
 				switch (msgParseState)
@@ -561,7 +432,7 @@ int main(void)
 						break;
 
 					case ST_MSG_SIZE_1:
-						msgLength		=	c<<8;
+						msgLength		=	c << 8;
 						msgParseState	=	ST_MSG_SIZE_2;
 						checksum		^=	c;
 						break;
@@ -588,7 +459,7 @@ int main(void)
 					case ST_GET_DATA:
 						msgBuffer[ii++]	=	c;
 						checksum		^=	c;
-						if (ii == msgLength )
+						if (ii >= msgLength )
 						{
 							msgParseState	=	ST_GET_CHECK;
 						}
@@ -605,7 +476,12 @@ int main(void)
 						}
 						break;
 				}	//	switch
+
+				chip_erase_task();
+
 			}	//	while(msgParseState)
+
+			dbg_printf("rx'ed msg len %d cmd 0x%02X\n", msgLength, msgBuffer[0]);
 
 			/*
 			 * Now process the STK500 commands, see Atmel Appnote AVR068
@@ -719,6 +595,7 @@ int main(void)
 					break;
 
 				case CMD_LEAVE_PROGMODE_ISP:
+					dbg_printf("leaving\n");
 					isLeave	=	1;
 					//*	fall thru
 
@@ -794,8 +671,8 @@ int main(void)
 				case CMD_CHIP_ERASE_ISP:
 					eraseAddress	=	0;
 					msgLength		=	2;
-				//	msgBuffer[1]	=	STATUS_CMD_OK;
-					msgBuffer[1]	=	STATUS_CMD_FAILED;	//*	isue 543, return FAILED instead of OK
+					msgBuffer[1]	=	STATUS_CMD_OK;
+					chipEraseRequested = 1;
 					break;
 
 				case CMD_LOAD_ADDRESS:
@@ -809,14 +686,17 @@ int main(void)
 					break;
 
 				case CMD_PROGRAM_FLASH_ISP:
+					if (chipEraseRequested) {
+						boot_spm_busy_wait();
+					}
+					chipEraseRequested = 0;
 				case CMD_PROGRAM_EEPROM_ISP:
 					{
 						unsigned int	size	=	((msgBuffer[1])<<8) | msgBuffer[2];
 						unsigned char	*p	=	msgBuffer+10;
 						unsigned int	data;
 						unsigned char	highByte, lowByte;
-						addr_t		tempaddress	=	address;
-
+						addr_t			tempaddress	=	address;
 
 						if ( msgBuffer[0] == CMD_PROGRAM_FLASH_ISP )
 						{
@@ -824,7 +704,7 @@ int main(void)
 							if (eraseAddress < APP_END )
 							{
 								boot_page_erase(eraseAddress);	// Perform page erase
-								boot_spm_busy_wait();		// Wait until the memory is erased.
+								boot_spm_busy_wait();			// Wait until the memory is erased.
 								eraseAddress += SPM_PAGESIZE;	// point to next page to be erase
 							}
 
@@ -864,7 +744,7 @@ int main(void)
 							} while (size);					// Loop until all bytes written
 						#endif
 						}
-							msgLength	=	2;
+						msgLength	=	2;
 						msgBuffer[1]	=	STATUS_CMD_OK;
 					}
 					break;
@@ -883,7 +763,6 @@ int main(void)
 
 							// Read FLASH
 							do {
-						//#if defined(RAMPZ)
 								data	=	pgm_read_word_at(address);
 								*p++	=	(unsigned char)data;		//LSB
 								*p++	=	(unsigned char)(data >> 8);	//MSB
@@ -916,41 +795,45 @@ int main(void)
 			/*
 			 * Now send answer message back
 			 */
-			sendchar(MESSAGE_START);
+			ser_putch(MESSAGE_START);
 			checksum	=	MESSAGE_START^0;
 
-			sendchar(seqNum);
+			ser_putch(seqNum);
 			checksum	^=	seqNum;
 
 			c			=	((msgLength>>8)&0xFF);
-			sendchar(c);
+			ser_putch(c);
 			checksum	^=	c;
 
 			c			=	msgLength&0x00FF;
-			sendchar(c);
+			ser_putch(c);
 			checksum ^= c;
 
-			sendchar(TOKEN);
+			ser_putch(TOKEN);
 			checksum ^= TOKEN;
 
 			p	=	msgBuffer;
 			while ( msgLength )
 			{
 				c	=	*p++;
-				sendchar(c);
+				ser_putch(c);
 				checksum ^=c;
 				msgLength--;
+				chip_erase_task();
 			}
-			sendchar(checksum);
+			ser_putch(checksum);
 			seqNum++;
 
 		#ifndef REMOVE_BOOTLOADER_LED
-			//*	<MLS>	toggle the LED
-			PROGLED_PORT	^=	(1<<PROGLED_PIN);	// active high LED ON
+			LED_TOG();
 		#endif
+
+			chip_erase_task();
 
 		}
 	}
+
+	dbg_printf("timeout init\n");
 
 	app_start();
 }

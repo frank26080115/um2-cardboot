@@ -68,31 +68,9 @@
 #include "pff.h"
 #include "debug.h"
 
-void flash_write_page(addr_t adr, const uint8_t* dat);
-
-FATFS Fatfs;              // Petit-FatFs work area
-BYTE  Buff[SPM_PAGESIZE]; // Page data buffer
-
-// Hardware configuration below
-
-#define CARDDETECT_DDRx  DDRG
-#define CARDDETECT_PORTx PORTG
-#define CARDDETECT_PINx  PING
-#define CARDDETECT_BIT   2
-#define CARD_DETECTED()  bit_is_clear(CARDDETECT_PINx, CARDDETECT_BIT)
-
-#define BUTTON_DDRx  DDRD
-#define BUTTON_PORTx PORTD
-#define BUTTON_PINx  PIND
-#define BUTTON_BIT   2
-#define BUTTON_PRESSED() bit_is_clear(BUTTON_PINx, BUTTON_BIT)
-
-#define LED_DDRx  DDRH
-#define LED_PORTx PORTH
-#define LED_BIT   5
-#define LED_ON()  PORTH |= _BV(LED_BIT)
-#define LED_OFF() PORTH &= ~_BV(LED_BIT)
-#define LED_TOG() PORTH ^= _BV(LED_BIT)
+FATFS Fatfs;
+uint8_t master_buffer[512];
+BYTE* Buff;
 
 void flash_write_page(addr_t adr, const uint8_t* dat)
 {
@@ -107,7 +85,7 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 		// validate that the erase worked
 		uint16_t r = pgm_read_word_at(i);
 		if (r != 0xFFFF) {
-			dbg_printf("flash erase failed at 0x%04X%04X, data 0x%04X\r\n", ((uint16_t*)&i)[1], ((uint16_t*)&i)[0], r);
+			dbg_printf("erase fail @ 0x%04X%04X r 0x%04X\n", ((uint16_t*)&i)[1], ((uint16_t*)&i)[0], r);
 		}
 		#endif
 		boot_page_fill(i, *((uint16_t*)(&dat[j])));
@@ -124,7 +102,7 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 		m = *((uint16_t*)(&dat[j]));
 		if (r != m)
 		{
-			dbg_printf("flash verification failed at 0x%04X%04X, read 0x%04X, should be 0x%04X\r\n", ((uint16_t*)&i)[1], ((uint16_t*)&i)[0], r, m);
+			dbg_printf("ver fail @ 0x%04X%04X r 0x%04X != 0x%04X\n", ((uint16_t*)&i)[1], ((uint16_t*)&i)[0], r, m);
 			boot_page_erase(0); // this will invalidate the app, so it cannot be launched, preventing rogue code from causing damage
 			boot_spm_busy_wait();
 			while (1) {
@@ -136,16 +114,13 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 
 void sd_card_boot(void)
 {
-	dbg_printf("\r\nUM2 SD Card Bootloader\r\n");
-	#ifdef ENABLE_DEBUG
-	dbg_printf("LFUSE 0x%02X, HFUSE 0x%02X\r\n", boot_lock_fuse_bits_get(GET_LOW_FUSE_BITS), boot_lock_fuse_bits_get(GET_HIGH_FUSE_BITS));
-	dbg_printf("EFUSE 0x%02X, LOCKBITS 0x%02X\r\n", boot_lock_fuse_bits_get(GET_EXTENDED_FUSE_BITS), boot_lock_fuse_bits_get(GET_LOCK_BITS));
-	#endif
+	dbg_printf("SD Card\n");
 
 	DWORD fa; // Flash address
 	WORD br;  // Bytes read
 	DWORD bw; // Bytes written
 	WORD i;   // Index for page difference check
+	Buff = (BYTE*)master_buffer;
 
 	CARDDETECT_DDRx &= ~_BV(CARDDETECT_BIT); // pin as input
 	CARDDETECT_PORTx |= _BV(CARDDETECT_BIT); // enable internal pull-up resistor
@@ -157,12 +132,12 @@ void sd_card_boot(void)
 	#endif
 
 	if (!CARD_DETECTED()) {
-		dbg_printf("card not detected\r\n");
+		dbg_printf("no card\n");
 		return;
 	}
 
 	if (!BUTTON_PRESSED()) {
-		dbg_printf("button not pressed\r\n");
+		dbg_printf("no btn\n");
 		return;
 	}
 
@@ -174,13 +149,13 @@ void sd_card_boot(void)
 	#ifdef ENABLE_DEBUG
 	if (fres != FR_OK)
 	{
-		dbg_printf("card mount failed, err 0x%02X\r\n", fres);
+		dbg_printf("fs mnt ERR 0x%02X\n", fres);
 	}
 	#endif
 	fres = pf_open("APP.BIN");
 	if (fres != FR_OK) // Open application file
 	{
-		dbg_printf("file failed to open, err 0x%02X\r\n", fres);
+		dbg_printf("file open ERR 0x%02X\n", fres);
 		while (1) {
 			LED_blink_pattern(0xB38F0F82);
 		}
@@ -217,13 +192,13 @@ void sd_card_boot(void)
 			LED_TOG(); // blink the LED while writing
 			flash_write_page(fa, Buff);
 			bw += br;
-			dbg_printf("bytes written: %d\r\n", bw);
+			dbg_printf("bw %d\n", bw);
 		}
 	}
 
 	if (bw > 0)
 	{
-		dbg_printf("all done\r\n");
+		dbg_printf("all done\n");
 		// triple blink the LED to indicate that new firmware written
 		LED_blink_pattern(0x40000); // used as a delay
 		LED_blink_pattern(0x402A02A);
@@ -231,7 +206,7 @@ void sd_card_boot(void)
 	}
 	else
 	{
-		dbg_printf("all done, nothing written\r\n");
+		dbg_printf("all done no W\n");
 		// single blink the LED to indicate that nothing was actually written
 		while (1) {
 			LED_blink_pattern(0x40002);
@@ -242,6 +217,13 @@ void sd_card_boot(void)
 void app_start(void)
 {
 	char canjump = can_jump();
+
+	if (canjump) {
+		dbg_printf("jmp2app\n");
+	}
+	else {
+		dbg_printf("no app\n");
+	}
 
 	// long blink to indicate blank app
 	while (!canjump)
