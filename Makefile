@@ -8,8 +8,7 @@ F_CPU       = 16000000
 MCU_ARCH    = avr6
 BOARD       = ULTIMAKER2
 
-# Boot loader start address, as hex in bytes
-BOOT_ADR    ?= 0x3E000
+# this should be placed at the beginning of the very last page
 SPMFUNC_ADR ?= 0x3FF00
 
 TARGET      = um2_cardboot
@@ -21,12 +20,13 @@ DEFS        = -DF_CPU=$(F_CPU) -D_BOARD_$(BOARD)_=1
 LIBS        =
 DEBUG       = dwarf-2
 
-ifdef AS_2NDARY_BOOTLOADER
-DEFS += -DAS_2NDARY_BOOTLOADER=1
+ifdef AS_SECONDARY_BOOTLOADER
+DEFS += -DAS_SECONDARY_BOOTLOADER=1
 DEFS += -DSPMFUNC_ADR=$(SPMFUNC_ADR)
-BOOT_ADR = 0x3B000
+BOOT_ADR ?= 0x3B000
 else
 CSRC += stk500boot.c
+BOOT_ADR ?= 0x3E000
 endif
 
 ifdef ENABLE_DEBUG
@@ -112,6 +112,7 @@ toolversion:
 # There are some weird code here, mainly because makefiles can't do math and makefiles have stupid rules about parenthesis
 # This implementation only works on MCUs that support JMP instructions
 
+CURA_DIR   ?= "C:\Program Files (x86)\Cura"
 UM2FW_DIR  ?= um2fw
 UM2FW_NAME ?= MarlinUltimaker2
 UM2FW_PATH ?= $(UM2FW_DIR)/$(UM2FW_NAME)
@@ -151,7 +152,7 @@ ifneq ($(strip $(shell $(RESET_FIND_RJMP) < $(UM2FW).disasm)),)
 endif
 else
 	@echo "Recursive Make"
-	make $@ RECURSIVE_MAKE=1
+	make $@ AS_SECONDARY_BOOTLOADER=1 RECURSIVE_MAKE=1
 endif
 
 # replaces the old reset vector with a jump to the bootloader
@@ -160,7 +161,7 @@ retargeted.asm: $(UM2FW).reasm
 	sed -r "N;s/^\.org\s+0x[0]+\s+jmp\s+0x[0-9a-fA-F]+.*?$$/.org 0x0\r\n\tjmp 0x$(BOOT_ADR_HEX)\t; to bootloader/" < $< | \
 	grep -v "\.org 0x" > $@
 
-ifdef AS_2NDARY_BOOTLOADER
+ifdef AS_SECONDARY_BOOTLOADER
 # only the first line of retargeted.hex is still guaranteed to be correct, the rest comes from the original FW
 # then the trampoline is added, but the trampoline hex has a lot of blanks which need to be removed
 # then the bootloader is appended
@@ -172,15 +173,15 @@ TRAMPADR_LOW_FIND    = echo $(TRAMPOLINE_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*
 SPMFUNCADR_HIGH_FIND = echo $(SPMFUNC_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F])[0-9a-fA-F]{4}\s*?$$/\U\1/p"
 SPMFUNCADR_LOW_FIND  = echo $(SPMFUNC_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F]{2})[0-9a-fA-F]{2}\s*?$$/\U\1/p"
 
-finalmerge.hex: retargeted.hex $(UM2FW).hex trampoline.hex $(BOOTFW).hex spmfunc.hex
+finalmerge.hex: retargeted.hex $(UM2FW_PATH).hex trampoline.hex $(BOOTFW).hex spmfunc.hex
 	head -n 1 retargeted.hex > $@
-	tail -n +2 $(UM2FW).hex | grep -v ":00000001FF" >> $@
+	tail -n +2 $(UM2FW_PATH).hex | grep -v ":00000001FF" >> $@
 	cat trampoline.hex | grep -E "^(:02000002$(shell $(TRAMPADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:10$(shell $(TRAMPADR_LOW_FIND)))" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
 	cat $(BOOTFW).hex | grep -v ":00000001FF" >> $@
 	cat spmfunc.hex | grep -E "^(:02000002$(shell $(SPMFUNCADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:10$(shell $(SPMFUNCADR_LOW_FIND)))" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
 else
 # no special processing, except the "end of file" indicator is removed
-finalmerge.hex: $(UM2FW).hex $(BOOTFW).hex
+finalmerge.hex: $(UM2FW_PATH).hex $(BOOTFW).hex
 	cat $^ | grep -v ":00000001FF" > $@
 endif
 
@@ -198,13 +199,13 @@ APP.BIN: $(UM2FW).bin
 
 PROG_PORT ?= AUTO
 
-ifdef AS_2NDARY_BOOTLOADER
+ifdef AS_SECONDARY_BOOTLOADER
 # installation must be done through a Python script that skips the original bootloader memory
 
 flash: $(TARGET).hex
 flashmerged: $(UM2FW)-cardboot.hex
 install: $(UM2FW)-cardboot.hex
-	python ./installer/stk500v2.py $(PROG_PORT) $<
+	$(CURA_DIR)/python/python.exe ./installer/stk500v2.py $(PROG_PORT) $<
 
 else
 # avrdude can be used to flash the bootloader

@@ -1,9 +1,9 @@
-.ifndef AS_2NDARY_BOOTLOADER
+.ifndef AS_SECONDARY_BOOTLOADER
 .text
 .section .fini1
 .endif
 .org SPMFUNC_ADR
-.ifndef AS_2NDARY_BOOTLOADER
+.ifndef AS_SECONDARY_BOOTLOADER
 .global	call_spm
 .func	call_spm
 .endif
@@ -26,6 +26,6 @@ wait_spm_2:	lds		r24, 0x0057
 			sbrc	r24, 0
 			rjmp	wait_spm_2
 			ret
-.ifndef AS_2NDARY_BOOTLOADER
+.ifndef AS_SECONDARY_BOOTLOADER
 .endfunc
 .endif

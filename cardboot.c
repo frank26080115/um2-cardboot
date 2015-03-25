@@ -71,14 +71,14 @@ FATFS Fatfs;
 uint8_t master_buffer[512];
 BYTE* Buff;
 
-#ifdef AS_2NDARY_BOOTLOADER
+#ifdef AS_SECONDARY_BOOTLOADER
 void flash_erase(addr_t); // asmfunc.S
 void flash_write(addr_t, const uint8_t*); // asmfunc.S
 #endif
 
 void flash_write_page(addr_t adr, const uint8_t* dat)
 {
-	#ifdef AS_2NDARY_BOOTLOADER
+	#ifdef AS_SECONDARY_BOOTLOADER
 	flash_erase(adr);
 	#else
 	boot_spm_busy_wait();
@@ -87,7 +87,7 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 	#endif
 	addr_t i;
 	uint16_t j;
-	#if defined(EANBLE_DEBUG) || !defined(AS_2NDARY_BOOTLOADER)
+	#if defined(EANBLE_DEBUG) || !defined(AS_SECONDARY_BOOTLOADER)
 	for (i = adr, j = 0; j < SPM_PAGESIZE; i += 2, j += 2)
 	{
 		#ifdef ENABLE_DEBUG
@@ -97,12 +97,12 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 			dbg_printf("erase fail @ 0x%04X%04X r 0x%04X\n", DBG32A(i), r);
 		}
 		#endif
-		#ifndef AS_2NDARY_BOOTLOADER
+		#ifndef AS_SECONDARY_BOOTLOADER
 		boot_page_fill(i, *((uint16_t*)(&dat[j])));
 		#endif
 	}
 	#endif
-	#ifdef AS_2NDARY_BOOTLOADER
+	#ifdef AS_SECONDARY_BOOTLOADER
 	flash_write(adr, dat);
 	#else
 	boot_page_write(adr);
@@ -120,7 +120,7 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 		{
 			dbg_printf("ver fail @ 0x%04X%04X r 0x%04X != 0x%04X\n", DBG32A(i), r, m);
 			// erasing page 0 will invalidate the app, so it cannot be launched, preventing rogue code from causing damage
-			#ifdef AS_2NDARY_BOOTLOADER
+			#ifdef AS_SECONDARY_BOOTLOADER
 			flash_erase(0);
 			#else
 			boot_page_erase(0);
@@ -133,7 +133,7 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 	}
 }
 
-#ifdef AS_2NDARY_BOOTLOADER
+#ifdef AS_SECONDARY_BOOTLOADER
 
 xjmp_t app_reset_vector;
 
@@ -197,7 +197,7 @@ void sd_card_boot(void)
 {
 	dbg_printf("SD Card\n");
 
-	#ifndef AS_2NDARY_BOOTLOADER
+	#ifndef AS_SECONDARY_BOOTLOADER
 	volatile char useless = 0;
 	if (useless) call_spm(0); // this forces the garbage collector to not collect it
 	#endif
@@ -214,7 +214,7 @@ void sd_card_boot(void)
 	BUTTON_DDRx &= ~_BV(BUTTON_BIT); // pin as input
 	BUTTON_PORTx |= _BV(BUTTON_BIT); // enable internal pull-up resistor
 
-	#ifdef AS_2NDARY_BOOTLOADER
+	#ifdef AS_SECONDARY_BOOTLOADER
 	char end_of_file = 0;
 	check_reset_vector();
 	#endif
@@ -284,7 +284,7 @@ void sd_card_boot(void)
 	for (fa = 0, bw = 0; fa < BOOT_ADR; fa += SPM_PAGESIZE) // Update all application pages
 	{
 		memset(Buff, 0xFF, SPM_PAGESIZE); // Clear buffer
-		#ifdef AS_2NDARY_BOOTLOADER
+		#ifdef AS_SECONDARY_BOOTLOADER
 		if (!end_of_file)
 		#endif
 		pf_read(Buff, SPM_PAGESIZE, &br); // Load a page data
@@ -292,12 +292,12 @@ void sd_card_boot(void)
 		char to_write = 0;
 
 		if (br > 0 // If data is available
-		#ifdef AS_2NDARY_BOOTLOADER
+		#ifdef AS_SECONDARY_BOOTLOADER
 		|| fa == (BOOT_ADR - SPM_PAGESIZE) // If is last page
 		#endif
 		)
 		{
-			#ifdef AS_2NDARY_BOOTLOADER
+			#ifdef AS_SECONDARY_BOOTLOADER
 			if (fa < SPM_PAGESIZE) // If is very first page
 			{
 				// the old reset vector will point inside the application
@@ -367,7 +367,7 @@ void sd_card_boot(void)
 				}
 			}
 		}
-		#ifdef AS_2NDARY_BOOTLOADER
+		#ifdef AS_SECONDARY_BOOTLOADER
 		else if (br <= 0)
 		{
 			end_of_file = 1;
@@ -420,7 +420,7 @@ void app_start(void)
 
 	dbg_deinit();
 
-	#ifdef AS_2NDARY_BOOTLOADER
+	#ifdef AS_SECONDARY_BOOTLOADER
 		// there is an instruction stored here (trampoline), jump here and execute it
 		#ifdef VECTORS_USE_JMP
 			#ifdef __AVR_HAVE_JMP_CALL__
@@ -474,7 +474,7 @@ void LED_blink_pattern(uint32_t x)
 
 char can_jump(void)
 {
-	#ifdef AS_2NDARY_BOOTLOADER
+	#ifdef AS_SECONDARY_BOOTLOADER
 	check_reset_vector();
 	xjmp_t tmpx = pgm_read_xjmp(BOOT_ADR - sizeof(xjmp_t));
 	// check if trampoline exists

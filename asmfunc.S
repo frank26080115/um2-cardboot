@@ -16,7 +16,7 @@
 #define	PORT_DO	_SFR_IO_ADDR(PORTB), 3
 
 
-#ifdef AS_2NDARY_BOOTLOADER
+#ifdef AS_SECONDARY_BOOTLOADER
 #define call_spm SPMFUNC_ADR
 #endif
 
@@ -132,7 +132,7 @@ xmit_spi:
 
 
 
-#ifdef AS_2NDARY_BOOTLOADER
+#ifdef AS_SECONDARY_BOOTLOADER
 ;---------------------------------------------------------------------------
 ; Erase a flash page
 ; void flash_erase (uint32_t adr);

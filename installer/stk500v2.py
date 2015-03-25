@@ -95,10 +95,10 @@ class Stk500v2(ispBase.IspBase):
 		for i in xrange(0, loadCount):
 			# Frank26080115: we need to place code in front of the STK500v2 bootloader, and also behind it, but not on top of it
 			# So skip the bootloader region that we don't care about
-			if i >= ((flashSize - (1024 * 8)) / pageSize) || i < loadCount:
+			if (i * pageSize) >= (flashSize - (1024 * 8)) and i < (loadCount - 1):
 				continue
 			# If we skipped stuff, then we need to set the address again
-			if i == loadCount:
+			if i >= (loadCount - 1):
 				j = i * pageSize / 2
 				if flashSize > 0xFFFF:
 					self.sendMessage([0x06, 0x80 | (((j & 0xFF000000) >> (8 * 3)) & 0x7F), (((j & 0xFF0000) >> (8 * 2)) & 0xFF), (((j & 0xFF00) >> 8) & 0xFF), (j & 0xFF)])
@@ -136,9 +136,9 @@ class Stk500v2(ispBase.IspBase):
 				k = i * 0x100
 				j = k / 2
 				# skip the bootloader region that we don't care about
-				if k >= (flashSize - (1024 * 8)) || i < loadCount:
+				if k >= (flashSize - (1024 * 8)) and i < (loadCount - 1):
 					continue
-				if i == loadCount:
+				if i >= (loadCount - 1):
 					if flashSize > 0xFFFF:
 						self.sendMessage([0x06, 0x80 | (((j & 0xFF000000) >> (8 * 3)) & 0x7F), (((j & 0xFF0000) >> (8 * 2)) & 0xFF), (((j & 0xFF00) >> 8) & 0xFF), (j & 0xFF)])
 					else:
