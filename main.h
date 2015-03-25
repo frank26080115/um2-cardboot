@@ -24,6 +24,24 @@
 #define pgm_read_dword_at(x) pgm_read_dword(x)
 #endif
 
+#ifdef __AVR_MEGA__
+#define VECTORS_USE_JMP
+#define xjmp_t uint32_t
+#define pgm_read_xjmp(x) pgm_read_dword_far(x)
+#else
+#define VECTORS_USE_RJMP
+#define xjmp_t uint16_t
+#define pgm_read_xjmp(x) pgm_read_word(x)
+#endif
+
+// AVR's printf cannot format 32 bit properly, so split it into two 16 bit, use %04X%04X as formatting
+#define DBG32(x) (((uint16_t*)(x))[1]),(((uint16_t*)(x))[0])
+#if (FLASHEND > UINT16_MAX)
+#define DBG32A(x) (((uint16_t*)(x))[1]),(((uint16_t*)(x))[0])
+#else
+#define DBG32A(x) 0,(x)
+#endif
+
 #define BOOTSIZE (0x400 * 8)
 #define APP_END  (FLASHEND - (2*BOOTSIZE) + 1)
 
@@ -65,17 +83,21 @@
 #define RXCn   RXC0
 #define USBSn  USBS0
 
-void sd_card_boot(void);
-void app_start(void);
-void LED_blink_pattern(uint32_t x);
-void dly_100us(void); // from asmfunc.S
-char can_jump(void);
-void ser_putch(unsigned char);
-uint8_t ser_readch(void);
-uint8_t ser_readch_timeout(void);
+extern void sd_card_boot(void);
+extern void app_start(void);
+extern void LED_blink_pattern(uint32_t x);
+extern void dly_100us(void); // from asmfunc.S
+extern char can_jump(void);
+extern void ser_putch(unsigned char);
+extern uint8_t ser_readch(void);
+extern uint8_t ser_readch_timeout(void);
 #define ser_avail() bit_is_set(UCSRnA, RXCn)
-void flash_write_page(addr_t adr, const uint8_t* dat);
-
+extern void flash_write_page(addr_t adr, const uint8_t* dat);
+extern void call_spm(uint8_t)
+#ifndef AS_2NDARY_BOOTLOADER
+	__attribute__ ((section (".fini1")))
+#endif
+;
 extern uint8_t master_buffer[512];
 
 #endif

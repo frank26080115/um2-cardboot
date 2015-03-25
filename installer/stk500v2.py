@@ -17,7 +17,7 @@ class Stk500v2(ispBase.IspBase):
 		self.seq = 1
 		self.lastAddr = -1
 		self.progressCallback = None
-	
+
 	def connect(self, port = 'COM22', speed = 115200):
 		if self.serial is not None:
 			self.close()
@@ -66,7 +66,7 @@ class Stk500v2(ispBase.IspBase):
 			self.serial = None
 			return ret
 		return None
-	
+
 	def isConnected(self):
 		return self.serial is not None
 
@@ -76,27 +76,44 @@ class Stk500v2(ispBase.IspBase):
 	def sendISP(self, data):
 		recv = self.sendMessage([0x1D, 4, 4, 0, data[0], data[1], data[2], data[3]])
 		return recv[2:6]
-	
+
 	def writeFlash(self, flashData):
 		#Set load addr to 0, in case we have more then 64k flash we need to enable the address extension
 		pageSize = self.chip['pageSize'] * 2
 		flashSize = pageSize * self.chip['pageCount']
+
+		# pad the data up to page boundary
+		while (len(flashData) % pageSize) != 0:
+			flashData.append(0xFF)
+
 		if flashSize > 0xFFFF:
 			self.sendMessage([0x06, 0x80, 0x00, 0x00, 0x00])
 		else:
 			self.sendMessage([0x06, 0x00, 0x00, 0x00, 0x00])
-		
+
 		loadCount = (len(flashData) + pageSize - 1) / pageSize
 		for i in xrange(0, loadCount):
+			# Frank26080115: we need to place code in front of the STK500v2 bootloader, and also behind it, but not on top of it
+			# So skip the bootloader region that we don't care about
+			if i >= ((flashSize - (1024 * 8)) / pageSize) || i < loadCount:
+				continue
+			# If we skipped stuff, then we need to set the address again
+			if i == loadCount:
+				j = i * pageSize / 2
+				if flashSize > 0xFFFF:
+					self.sendMessage([0x06, 0x80 | (((j & 0xFF000000) >> (8 * 3)) & 0x7F), (((j & 0xFF0000) >> (8 * 2)) & 0xFF), (((j & 0xFF00) >> 8) & 0xFF), (j & 0xFF)])
+				else:
+					self.sendMessage([0x06, 0x00, 0x00, (((j & 0xFF00) >> 8) & 0xFF), (j & 0xFF)])
 			recv = self.sendMessage([0x13, pageSize >> 8, pageSize & 0xFF, 0xc1, 0x0a, 0x40, 0x4c, 0x20, 0x00, 0x00] + flashData[(i * pageSize):(i * pageSize + pageSize)])
 			if self.progressCallback is not None:
 				if self._has_checksum:
 					self.progressCallback(i + 1, loadCount)
 				else:
 					self.progressCallback(i + 1, loadCount*2)
-	
+
 	def verifyFlash(self, flashData):
 		if self._has_checksum:
+			raise ispBase.IspError("Checksum required but unsupported") # Frank26080115: since we are skipping over an unknown region, we can't use checksums
 			self.sendMessage([0x06, 0x00, (len(flashData) >> 17) & 0xFF, (len(flashData) >> 9) & 0xFF, (len(flashData) >> 1) & 0xFF])
 			res = self.sendMessage([0xEE])
 			checksum_recv = res[2] | (res[3] << 8)
@@ -116,6 +133,16 @@ class Stk500v2(ispBase.IspBase):
 
 			loadCount = (len(flashData) + 0xFF) / 0x100
 			for i in xrange(0, loadCount):
+				k = i * 0x100
+				j = k / 2
+				# skip the bootloader region that we don't care about
+				if k >= (flashSize - (1024 * 8)) || i < loadCount:
+					continue
+				if i == loadCount:
+					if flashSize > 0xFFFF:
+						self.sendMessage([0x06, 0x80 | (((j & 0xFF000000) >> (8 * 3)) & 0x7F), (((j & 0xFF0000) >> (8 * 2)) & 0xFF), (((j & 0xFF00) >> 8) & 0xFF), (j & 0xFF)])
+					else:
+						self.sendMessage([0x06, 0x00, 0x00, (((j & 0xFF00) >> 8) & 0xFF), (j & 0xFF)])
 				recv = self.sendMessage([0x14, 0x01, 0x00, 0x20])[2:0x102]
 				if self.progressCallback is not None:
 					self.progressCallback(loadCount + i + 1, loadCount*2)
@@ -138,7 +165,7 @@ class Stk500v2(ispBase.IspBase):
 			raise ispBase.IspError('Serial send timeout')
 		self.seq = (self.seq + 1) & 0xFF
 		return self.recvMessage()
-	
+
 	def recvMessage(self):
 		state = 'Start'
 		checksum = 0

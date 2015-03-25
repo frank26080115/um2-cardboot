@@ -7,8 +7,13 @@
 #ifdef ENABLE_DEBUG
 
 int dbg_putch(uint8_t c, FILE* s) {
-	if (c == '\n') ser_putch('\r');
+	if (c == '\n') dbg_putch('\r', s);
+	#ifdef AS_2NDARY_BOOTLOADER
+	while (bit_is_clear(UCSRnA, UDREn)) ; // wait for TX to finish
+	UDRn = c;
+	#else
 	ser_putch(c);
+	#endif
 	return 1;
 }
 
@@ -19,7 +24,10 @@ FILE ser_stdout = FDEV_SETUP_STREAM(dbg_putch, NULL, _FDEV_SETUP_WRITE);
 #ifdef ENABLE_DEBUG
 void dbg_init(void)
 {
+	#ifdef AS_2NDARY_BOOTLOADER
+	#else
 	// assume STK500v2 code already initialized UART
+	#endif
 }
 
 void dbg_deinit(void)

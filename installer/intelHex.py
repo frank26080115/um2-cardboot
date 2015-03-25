@@ -30,10 +30,10 @@ def readHex(filename):
 		checkSum &= 0xFF
 		if checkSum != 0:
 			raise Exception("Checksum error in hex file: " + line)
-		
+
 		if recType == 0:#Data record
 			while len(data) < addr + recLen:
-				data.append(0)
+				data.append(0xFF)
 			for i in xrange(0, recLen):
 				data[addr + i] = int(line[i*2+9:i*2+11], 16)
 		elif recType == 1:	#End Of File record

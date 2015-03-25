@@ -16,6 +16,10 @@
 #define	PORT_DO	_SFR_IO_ADDR(PORTB), 3
 
 
+#ifdef AS_2NDARY_BOOTLOADER
+#define call_spm SPMFUNC_ADR
+#endif
+
 ;---------------------------------------------------------------------------;
 .nolist
 #include <avr/io.h>
@@ -126,23 +130,57 @@ xmit_spi:
 	ret
 .endfunc
 
-; this only exists as a backup mechanism, in case the app region needs to utilize SPM
-.global	call_spm
-.func	call_spm
-; make sure r24 contains whatever you want for SPMCSR first
-; and make sure the stack pointer has the correct return address
-call_spm:	sts		_SFR_MEM_ADDR(SPMCSR), r24
-; remember that spm must be called within 4 cycles of writing SPMCSR
-			spm
-wait_spm_1:	lds		r24, _SFR_MEM_ADDR(SPMCSR)
-			sbrc	r24, 0
-			rjmp	wait_spm_1
-			; Re-enable read access to the flash
-reen_rww:	ldi	r24, 0b00010001
-			sts		_SFR_MEM_ADDR(SPMCSR), r24
-			spm
-wait_spm_2:	lds		r24, _SFR_MEM_ADDR(SPMCSR)
-			sbrc	r24, 0
-			rjmp	wait_spm_2
-			ret
+
+
+#ifdef AS_2NDARY_BOOTLOADER
+;---------------------------------------------------------------------------
+; Erase a flash page
+; void flash_erase (uint32_t adr);
+.global flash_erase
+.func flash_erase
+flash_erase:
+	movw	ZL, r22
+#if FLASHEND > UINT16_MAX
+	out		_SFR_IO_ADDR(RAMPZ), r24
+#endif
+	; Initiate erase operation
+	ldi		r24, 0b00000011
+	call	call_spm
+	ret
 .endfunc
+
+;---------------------------------------------------------------------------
+; Write a flash page
+; void flash_write (uint32_t adr, const uint8_t* data);
+.global flash_write
+.func flash_write
+flash_write:
+	push	r0
+	push	r1
+
+#if FLASHEND > UINT16_MAX
+	out	_SFR_IO_ADDR(RAMPZ), r24
+#endif
+
+	; Fill page buffer
+	movw	ZL, r22
+	movw	XL, r20
+	ldi		r25, lo8(SPM_PAGESIZE/2)
+load_word:
+	ld		r0, X+
+	ld		r1, X+
+	ldi		r24, 0b00000001
+	call	call_spm
+	adiw	ZL, 2
+	dec		r25
+	brne	load_word
+	; Initiate write operation
+	movw	ZL, r22
+	ldi		r24, 0b00000101
+	call call_spm
+	pop	r1
+	pop	r0
+	ret
+.endfunc
+
+#endif
