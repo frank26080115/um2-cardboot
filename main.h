@@ -41,6 +41,11 @@
 #else
 #define DBG32A(x) 0,(x)
 #endif
+#ifdef VECTORS_USE_JMP
+#define DBGXJMP(x) (((uint16_t*)(x))[1]),(((uint16_t*)(x))[0])
+#elif defined(VECTORS_USE_RJMP)
+#define DBGXJMP(x) 0,(x)
+#endif
 
 #define BOOTSIZE (0x400 * 8)
 #define APP_END  (FLASHEND - (2*BOOTSIZE) + 1)
@@ -83,6 +88,20 @@
 #define RXCn   RXC0
 #define USBSn  USBS0
 
+//************************************************************************
+//*	these are used to test issues
+//*	http://code.google.com/p/arduino/issues/detail?id=505
+//*	Reported by mark.stubbs, Mar 14, 2011
+//*	The STK500V2 bootloader is comparing the seqNum to 1 or the current sequence 
+//*	(IE: Requiring the sequence to be 1 or match seqNum before continuing).  
+//*	The correct behavior is for the STK500V2 to accept the PC's sequence number, and echo it back for the reply message.
+#define	_FIX_ISSUE_505_
+//************************************************************************
+//*	Issue 181: added watch dog timer support
+//#define	_FIX_ISSUE_181_
+#define	_FIX_STACK_POINTER_1_
+//#define	_FIX_STACK_POINTER_2_
+
 extern void sd_card_boot(void);
 extern void app_start(void);
 extern void LED_blink_pattern(uint32_t x);
@@ -98,6 +117,9 @@ extern void call_spm(uint8_t)
 	__attribute__ ((section (".fini1")))
 #endif
 ;
+#ifdef _FIX_STACK_POINTER_1_
+void __jumpMain	(void) __attribute__ ((naked)) __attribute__ ((section (".init9")));
+#endif
 extern uint8_t master_buffer[512];
 
 #endif

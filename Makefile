@@ -23,7 +23,11 @@ DEBUG       = dwarf-2
 ifdef AS_SECONDARY_BOOTLOADER
 DEFS += -DAS_SECONDARY_BOOTLOADER=1
 DEFS += -DSPMFUNC_ADR=$(SPMFUNC_ADR)
+ifdef ENABLE_DEBUG
+BOOT_ADR ?= 0x30000
+else
 BOOT_ADR ?= 0x3B000
+endif
 else
 CSRC += stk500boot.c
 BOOT_ADR ?= 0x3E000
@@ -82,7 +86,9 @@ lst:  $(TARGET).lst
 %.elf: %.asm
 	$(AS) -mmcu=$(MCU_TARGET) -mall-opcodes $(subst -D,--defsym ,$(DEFS)) -W -o $@ $<
 
+ifndef AS_SECONDARY_BOOTLOADER
 text: $(TARGET).hex
+endif
 
 %.hex: %.elf
 	$(OBJCOPY) -j .text -j .data -j .fuse -j .bootloader -O ihex $< $@
@@ -127,7 +133,7 @@ cleanmerged: cleanmergedartifacts
 	rm -rf $(UM2FW)-cardboot.hex
 
 cleanmergedartifacts:
-	rm -rf $(UM2FW).disasm $(UM2FW).reasm $(UM2FW).asm trampoline.elf trampoline.hex trampoline.asm retargeted.hex retargeted.elf retargeted.asm finalmerge.hex spmfunc.lst spmfunc.hex spmfunc.elf spmfunc.o
+	rm -rf $(UM2FW).disasm $(UM2FW).reasm $(UM2FW).asm trampoline.elf trampoline.hex trampoline.asm retargeted.hex retargeted.elf retargeted.asm finalmerge.hex spmfunc.lst spmfunc.hex spmfunc.elf spmfunc.o $(BOOTFW)_nospmfunc.hex
 
 allmerged: $(UM2FW)-cardboot.hex size
 
@@ -173,12 +179,20 @@ TRAMPADR_LOW_FIND    = echo $(TRAMPOLINE_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*
 SPMFUNCADR_HIGH_FIND = echo $(SPMFUNC_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F])[0-9a-fA-F]{4}\s*?$$/\U\1/p"
 SPMFUNCADR_LOW_FIND  = echo $(SPMFUNC_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F]{2})[0-9a-fA-F]{2}\s*?$$/\U\1/p"
 
-finalmerge.hex: retargeted.hex $(UM2FW_PATH).hex trampoline.hex $(BOOTFW).hex spmfunc.hex
+$(BOOTFW)_nospmfunc.hex: $(BOOTFW).elf spmfunc.hex
+	$(OBJCOPY) -j .text -j .data -j .fuse -j .bootloader -O ihex $< $@
+
+text: $(BOOTFW).hex
+
+$(BOOTFW).hex: $(BOOTFW)_nospmfunc.hex spmfunc.hex
+	cat $< | grep -v ":00000001FF" > $@
+	cat spmfunc.hex | grep -E "^(:02000002$(shell $(SPMFUNCADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:10$(shell $(SPMFUNCADR_LOW_FIND)))" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
+
+finalmerge.hex: retargeted.hex $(UM2FW_PATH).hex trampoline.hex $(BOOTFW).hex
 	head -n 1 retargeted.hex > $@
 	tail -n +2 $(UM2FW_PATH).hex | grep -v ":00000001FF" >> $@
 	cat trampoline.hex | grep -E "^(:02000002$(shell $(TRAMPADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:10$(shell $(TRAMPADR_LOW_FIND)))" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
 	cat $(BOOTFW).hex | grep -v ":00000001FF" >> $@
-	cat spmfunc.hex | grep -E "^(:02000002$(shell $(SPMFUNCADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:10$(shell $(SPMFUNCADR_LOW_FIND)))" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
 else
 # no special processing, except the "end of file" indicator is removed
 finalmerge.hex: $(UM2FW_PATH).hex $(BOOTFW).hex
@@ -203,7 +217,9 @@ ifdef AS_SECONDARY_BOOTLOADER
 # installation must be done through a Python script that skips the original bootloader memory
 
 flash: $(TARGET).hex
+	$(CURA_DIR)/python/python.exe ./installer/stk500v2.py $(PROG_PORT) $<
 flashmerged: $(UM2FW)-cardboot.hex
+	$(CURA_DIR)/python/python.exe ./installer/stk500v2.py $(PROG_PORT) $<
 install: $(UM2FW)-cardboot.hex
 	$(CURA_DIR)/python/python.exe ./installer/stk500v2.py $(PROG_PORT) $<
 

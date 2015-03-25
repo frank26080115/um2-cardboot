@@ -17,7 +17,9 @@
 
 
 #ifdef AS_SECONDARY_BOOTLOADER
+#ifndef AVR_SIMULATION
 #define call_spm SPMFUNC_ADR
+#endif
 #endif
 
 ;---------------------------------------------------------------------------;
@@ -183,4 +185,9 @@ load_word:
 	ret
 .endfunc
 
+#endif
+
+#ifdef AVR_SIMULATION
+call_spm:
+	ret
 #endif

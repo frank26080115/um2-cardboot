@@ -68,7 +68,7 @@
 #include "debug.h"
 
 FATFS Fatfs;
-uint8_t master_buffer[512];
+uint8_t master_buffer[SPM_PAGESIZE * 2];
 BYTE* Buff;
 
 #ifdef AS_SECONDARY_BOOTLOADER
@@ -118,7 +118,7 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 		m = *((uint16_t*)(&dat[j]));
 		if (r != m)
 		{
-			dbg_printf("ver fail @ 0x%04X%04X r 0x%04X != 0x%04X\n", DBG32A(i), r, m);
+			dbg_printf("veri fail @ 0x%04X%04X r 0x%04X != 0x%04X\n", DBG32A(i), r, m);
 			// erasing page 0 will invalidate the app, so it cannot be launched, preventing rogue code from causing damage
 			#ifdef AS_SECONDARY_BOOTLOADER
 			flash_erase(0);
@@ -139,6 +139,30 @@ xjmp_t app_reset_vector;
 
 int main(void)
 {
+	#ifdef _FIX_STACK_POINTER_2_
+	//	some chips dont set the stack properly
+	asm volatile ( ".set __stack, %0" :: "i" (RAMEND) );
+	asm volatile ( "ldi	16, %0" :: "i" (RAMEND >> 8) );
+	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_HI_ADDR) );
+	asm volatile ( "ldi	16, %0" :: "i" (RAMEND & 0x0ff) );
+	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_LO_ADDR) );
+	#endif
+
+	#ifdef _FIX_ISSUE_181_
+	//*	Dec 29,	2011	<MLS> Issue #181, added watch dog timer support
+	//*	handle the watch dog timer
+	uint8_t	mcuStatusReg;
+	mcuStatusReg	=	MCUSR;
+
+	cli();
+	MCUSR	=	0;
+	wdt_disable();
+	// check if WDT generated the reset, if so, go straight to app
+	if (mcuStatusReg & _BV(WDRF)) {
+		app_start();
+	}
+	#endif
+
 	dbg_init();
 	sd_card_boot();
 	app_start();
@@ -146,8 +170,38 @@ int main(void)
 	return 0;
 }
 
+#ifdef _FIX_STACK_POINTER_1_
+/*
+ * since this bootloader is not linked against the avr-gcc crt1 functions,
+ * to reduce the code size, we need to provide our own initialization
+ */
+
+//#define	SPH_REG	0x3E
+//#define	SPL_REG	0x3D
+
+void __jumpMain(void)
+{
+//	July 17, 2010	<MLS> Added stack pointer initialzation
+//	the first line did not do the job on the ATmega128
+
+	asm volatile ( ".set __stack, %0" :: "i" (RAMEND) );
+
+//	set stack pointer to top of RAM
+
+	asm volatile ( "ldi	16, %0" :: "i" (RAMEND >> 8) );
+	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_HI_ADDR) );
+
+	asm volatile ( "ldi	16, %0" :: "i" (RAMEND & 0x0ff) );
+	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_LO_ADDR) );
+
+	asm volatile ( "clr __zero_reg__" );									// GCC depends on register r1 set to 0
+	asm volatile ( "out %0, __zero_reg__" :: "I" (_SFR_IO_ADDR(SREG)) );	// set SREG to 0
+	asm volatile ( "jmp main");												// jump to main()
+}
+#endif
+
 #ifdef VECTORS_USE_JMP
-static xjmp_t make_jmp(addr_t x)
+xjmp_t make_jmp(addr_t x)
 {
 	x >>= 1;
 	addr_t y = x & 0x0001FFFF;
@@ -161,7 +215,7 @@ static xjmp_t make_jmp(addr_t x)
 }
 #endif
 #ifdef VECTORS_USE_RJMP
-static xjmp_t make_rjmp(addr_t src, addr_t dst)
+xjmp_t make_rjmp(addr_t src, addr_t dst)
 {
 	addr_t delta = dst - src;
 	uint16_t delta16 = (uint16_t)delta;
@@ -171,9 +225,9 @@ static xjmp_t make_rjmp(addr_t src, addr_t dst)
 }
 #endif
 
-static void check_reset_vector(void)
+void check_reset_vector(void)
 {
-	xjmp_t tmp1, tmp2;
+	volatile xjmp_t tmp1, tmp2;
 	#ifdef VECTORS_USE_JMP
 	tmp1 = make_jmp(BOOT_ADR);
 	#elif defined(VECTORS_USE_RJMP)
@@ -182,7 +236,9 @@ static void check_reset_vector(void)
 	tmp2 = pgm_read_xjmp(0);
 	if (tmp2 != tmp1)
 	{
-		dbg_printf("reset vector requires overwrite, read 0x%04X%04X, should be 0x%04X%04X\r\n", ((uint16_t*)&tmp2)[1], ((uint16_t*)&tmp2)[0], ((uint16_t*)&tmp1)[1], ((uint16_t*)&tmp1)[0]);
+		dbg_printf("rst vec need OW ");
+		dbg_printf("read 0x%04X%04X ", DBGXJMP(tmp2));
+		dbg_printf("!= 0x%04X%04X\n", DBGXJMP(tmp1));
 		// this means existing flash will not activate the bootloader
 		// so we force a rewrite of this vector
 		memset(Buff, 0xFF, SPM_PAGESIZE); // Clear buffer
@@ -235,11 +291,11 @@ void sd_card_boot(void)
 			return;
 		}
 	#ifdef ENABLE_DEBUG
-		dbg_printf("can jump, almost primed\r\n");
+		dbg_printf("can jump, almost primed\n");
 	}
 	else
 	{
-		dbg_printf("forced to boot from card\r\n");
+		dbg_printf("forced to boot from card\n");
 	#endif
 	}
 
@@ -310,7 +366,7 @@ void sd_card_boot(void)
 				#elif defined(VECTORS_USE_RJMP)
 					make_rjmp(0, BOOT_ADR);
 				#endif
-				dbg_printf("rst vect old 0x%08X new 0x%08X\n", app_reset_vector, (*((xjmp_t*)Buff)));
+				dbg_printf("rst vect old 0x%04X%04X new 0x%04X%04X\n", DBGXJMP(app_reset_vector), DBGXJMP((*((xjmp_t*)Buff))));
 				if (br <= 0) br += sizeof(xjmp_t);
 			}
 			else if (fa == (BOOT_ADR - SPM_PAGESIZE)) // If is trampoline
@@ -379,7 +435,7 @@ void sd_card_boot(void)
 			LED_TOG(); // blink the LED while writing
 			flash_write_page(fa, Buff);
 			bw += br;
-			dbg_printf("bytes written: %d\r\n", bw);
+			dbg_printf("bytes written: %d\n", bw);
 		}
 	}
 
@@ -459,7 +515,7 @@ void LED_blink_pattern(uint32_t x)
 	// 10001110001110 would mean "blink the LED twice slowly"
 	// 0x83E1E39A is fast to slow, 0xB38F0F82 is slow to fast
 
-	while (x)
+ 	while (x)
 	{
 		x >>= 1;
 		if ((x & 1) != 0) {
@@ -480,10 +536,10 @@ char can_jump(void)
 	// check if trampoline exists
 	#ifdef VECTORS_USE_JMP
 	if ((tmpx & 0xFFFF) == 0xFFFF || (tmpx & 0xFFFF) == 0x0000 || tmpx == make_jmp(BOOT_ADR)) {
-		dbg_printf("trampoline missing, read 0x%04X%04X\r\n", ((uint16_t*)&tmpx)[1], ((uint16_t*)&tmpx)[0]);
+		dbg_printf("tramp missing read 0x%04X%04X\n", DBGXJMP(tmpx));
 	#elif defined(VECTORS_USE_RJMP)
 	if (tmpx == 0xFFFF || tmpx == 0x0000 || tmpx == make_rjmp(0, BOOT_ADR)) {
-		dbg_printf("trampoline missing, read 0x%04X\r\n", tmpx);
+		dbg_printf("tramp missing read 0x%04X\n", tmpx);
 	#endif
 		return 0;
 	}
@@ -491,6 +547,12 @@ char can_jump(void)
 	#else
 	// check if app exists by seeing if there's a valid instruction
 	uint16_t x = pgm_read_word_at(0);
-	return (x != 0x0000 && x != 0xFFFF);
+	if (x == 0x0000 || x == 0xFFFF) {
+		dbg_printf("app missing\n");
+		return 0;
+	}
+	else {
+		return 1;
+	}
 	#endif
 }
