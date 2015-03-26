@@ -8,21 +8,23 @@ F_CPU       = 16000000
 MCU_ARCH    = avr6
 BOARD       = ULTIMAKER2
 
+# the start address of the actual bootloader region
+PRI_BOOT_ADR ?= 0x3E000
+
 # this should be placed at the beginning of the very last page
 SPMFUNC_ADR ?= 0x3FF00
 
 TARGET      = um2_cardboot
 CSRC        = cardboot.c pff.c mmcbbp.c
 ASRC        = asmfunc.S
-ASMSRC      = spmfunc.asm
+ASMSRC      =
 OPTIMIZE    = -Os -ffunction-sections -fpack-struct -fshort-enums -fno-move-loop-invariants -fno-inline-small-functions -mcall-prologues -mrelax -fno-tree-scev-cprop -fno-jump-tables
-DEFS        = -DF_CPU=$(F_CPU) -D_BOARD_$(BOARD)_=1
+DEFS        = -DF_CPU=$(F_CPU) -D_BOARD_$(BOARD)_=1 -DSPMFUNC_ADR=$(SPMFUNC_ADR)
 LIBS        =
 DEBUG       = dwarf-2
 
 ifdef AS_SECONDARY_BOOTLOADER
 DEFS += -DAS_SECONDARY_BOOTLOADER=1
-DEFS += -DSPMFUNC_ADR=$(SPMFUNC_ADR)
 ifdef ENABLE_DEBUG
 BOOT_ADR ?= 0x30000
 else
@@ -30,7 +32,7 @@ BOOT_ADR ?= 0x3B000
 endif
 else
 CSRC += stk500boot.c
-BOOT_ADR ?= 0x3E000
+BOOT_ADR ?= $(PRI_BOOT_ADR)
 endif
 
 ifdef ENABLE_DEBUG
@@ -81,9 +83,6 @@ lst:  $(TARGET).lst
 	$(CC) -c $(ALL_ASFLAGS) $< -o $@
 
 %.o: %.asm
-	$(AS) -mmcu=$(MCU_TARGET) -mall-opcodes $(subst -D,--defsym ,$(DEFS)) -W -o $@ $<
-
-%.elf: %.asm
 	$(AS) -mmcu=$(MCU_TARGET) -mall-opcodes $(subst -D,--defsym ,$(DEFS)) -W -o $@ $<
 
 ifndef AS_SECONDARY_BOOTLOADER
@@ -141,6 +140,8 @@ $(UM2FW)-cardboot.hex: finalmerge.hex finalmerge.lst
 	mv $< $@
 
 %.elf: %.o %.S
+	$(LD) -m $(MCU_ARCH) -nostartfiles -o $@ $<
+
 %.elf: %.o %.asm
 	$(LD) -m $(MCU_ARCH) -nostartfiles -o $@ $<
 
@@ -167,6 +168,9 @@ retargeted.asm: $(UM2FW).reasm
 	sed -r "N;s/^\.org\s+0x[0]+\s+jmp\s+0x[0-9a-fA-F]+.*?$$/.org 0x0\r\n\tjmp 0x$(BOOT_ADR_HEX)\t; to bootloader/" < $< | \
 	grep -v "\.org 0x" > $@
 
+SPMFUNCADR_HIGH_FIND = echo $(SPMFUNC_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F])[0-9a-fA-F]{4}\s*?$$/\U\1/p"
+SPMFUNCADR_LOW_FIND  = echo $(SPMFUNC_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F]{2})[0-9a-fA-F]{2}\s*?$$/\U\1/p"
+
 ifdef AS_SECONDARY_BOOTLOADER
 # only the first line of retargeted.hex is still guaranteed to be correct, the rest comes from the original FW
 # then the trampoline is added, but the trampoline hex has a lot of blanks which need to be removed
@@ -176,27 +180,28 @@ ifdef AS_SECONDARY_BOOTLOADER
 
 TRAMPADR_HIGH_FIND   = echo $(TRAMPOLINE_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F])[0-9a-fA-F]{4}\s*?$$/\U\1/p"
 TRAMPADR_LOW_FIND    = echo $(TRAMPOLINE_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F]{2})[0-9a-fA-F]{2}\s*?$$/\U\1/p"
-SPMFUNCADR_HIGH_FIND = echo $(SPMFUNC_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F])[0-9a-fA-F]{4}\s*?$$/\U\1/p"
-SPMFUNCADR_LOW_FIND  = echo $(SPMFUNC_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F]{2})[0-9a-fA-F]{2}\s*?$$/\U\1/p"
 
-$(BOOTFW)_nospmfunc.hex: $(BOOTFW).elf spmfunc.hex
+$(BOOTFW)_nospmfunc.hex: $(BOOTFW).elf spmfunc.o spmfunc.hex $(BOOTFW).lst
 	$(OBJCOPY) -j .text -j .data -j .fuse -j .bootloader -O ihex $< $@
 
 text: $(BOOTFW).hex
 
-$(BOOTFW).hex: $(BOOTFW)_nospmfunc.hex spmfunc.hex
+$(BOOTFW).hex: $(BOOTFW)_nospmfunc.hex spmfunc.o spmfunc.hex
 	cat $< | grep -v ":00000001FF" > $@
-	cat spmfunc.hex | grep -E "^(:02000002$(shell $(SPMFUNCADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:10$(shell $(SPMFUNCADR_LOW_FIND)))" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
+	cat spmfunc.hex | grep -E "^(:02000002$(shell $(SPMFUNCADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:[0-9A-F]{2}$(shell $(SPMFUNCADR_LOW_FIND))[0-9A-F]{2}00)" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
 
 finalmerge.hex: retargeted.hex $(UM2FW_PATH).hex trampoline.hex $(BOOTFW).hex
 	head -n 1 retargeted.hex > $@
 	tail -n +2 $(UM2FW_PATH).hex | grep -v ":00000001FF" >> $@
-	cat trampoline.hex | grep -E "^(:02000002$(shell $(TRAMPADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:10$(shell $(TRAMPADR_LOW_FIND)))" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
+	cat trampoline.hex | grep -E "^(:02000002$(shell $(TRAMPADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:[0-9A-F]{2}$(shell $(TRAMPADR_LOW_FIND))[0-9A-F]{2}00)" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
 	cat $(BOOTFW).hex | grep -v ":00000001FF" >> $@
 else
-# no special processing, except the "end of file" indicator is removed
-finalmerge.hex: $(UM2FW_PATH).hex $(BOOTFW).hex
-	cat $^ | grep -v ":00000001FF" > $@
+# the "end of file" indicator is removed
+# blank space is removed
+# spm function is appended to the absolute end
+finalmerge.hex: $(UM2FW_PATH).hex $(BOOTFW).hex spmfunc.o spmfunc.hex
+	cat $(UM2FW_PATH).hex $(BOOTFW).hex | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" > $@
+	cat spmfunc.hex | grep -E "^(:02000002$(shell $(SPMFUNCADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:[0-9A-F]{2}$(shell $(SPMFUNCADR_LOW_FIND))[0-9A-F]{2}00)" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
 endif
 
 # if a FW is to be loaded via SD card, it must be named "APP.BIN", all capitals

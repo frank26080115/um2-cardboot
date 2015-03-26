@@ -112,7 +112,7 @@ extern uint8_t ser_readch(void);
 extern uint8_t ser_readch_timeout(void);
 #define ser_avail() bit_is_set(UCSRnA, RXCn)
 extern void flash_write_page(addr_t adr, const uint8_t* dat);
-extern void call_spm(uint8_t)
+extern void flash_page_wrapper(addr_t, const uint8_t*); // asmfunc.S
 #ifndef AS_SECONDARY_BOOTLOADER
 	__attribute__ ((section (".fini1")))
 #endif

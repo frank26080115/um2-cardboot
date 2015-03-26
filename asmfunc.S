@@ -16,10 +16,8 @@
 #define	PORT_DO	_SFR_IO_ADDR(PORTB), 3
 
 
-#ifdef AS_SECONDARY_BOOTLOADER
-#ifndef AVR_SIMULATION
-#define call_spm SPMFUNC_ADR
-#endif
+#if !defined(AVR_SIMULATION) && !defined(TEST_FLASH_CALLS)
+#define flash_page SPMFUNC_ADR
 #endif
 
 ;---------------------------------------------------------------------------;
@@ -133,61 +131,18 @@ xmit_spi:
 .endfunc
 
 
-
-#ifdef AS_SECONDARY_BOOTLOADER
 ;---------------------------------------------------------------------------
-; Erase a flash page
-; void flash_erase (uint32_t adr);
-.global flash_erase
-.func flash_erase
-flash_erase:
-	movw	ZL, r22
-#if FLASHEND > UINT16_MAX
-	out		_SFR_IO_ADDR(RAMPZ), r24
-#endif
-	; Initiate erase operation
-	ldi		r24, 0b00000011
-	call	call_spm
+; void flash_page_wrapper (uint32_t adr, const uint8_t* data);
+.global flash_page_wrapper
+.func flash_page_wrapper
+flash_page_wrapper:
+	call flash_page
 	ret
 .endfunc
 
-;---------------------------------------------------------------------------
-; Write a flash page
-; void flash_write (uint32_t adr, const uint8_t* data);
-.global flash_write
-.func flash_write
-flash_write:
-	push	r0
-	push	r1
 
-#if FLASHEND > UINT16_MAX
-	out	_SFR_IO_ADDR(RAMPZ), r24
-#endif
-
-	; Fill page buffer
-	movw	ZL, r22
-	movw	XL, r20
-	ldi		r25, lo8(SPM_PAGESIZE/2)
-load_word:
-	ld		r0, X+
-	ld		r1, X+
-	ldi		r24, 0b00000001
-	call	call_spm
-	adiw	ZL, 2
-	dec		r25
-	brne	load_word
-	; Initiate write operation
-	movw	ZL, r22
-	ldi		r24, 0b00000101
-	call call_spm
-	pop	r1
-	pop	r0
-	ret
-.endfunc
-
-#endif
-
-#ifdef AVR_SIMULATION
-call_spm:
+#if defined(AVR_SIMULATION) || defined(TEST_FLASH_CALLS)
+flash_page:
+	nop
 	ret
 #endif

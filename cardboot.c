@@ -71,44 +71,26 @@ FATFS Fatfs;
 uint8_t master_buffer[SPM_PAGESIZE * 2];
 BYTE* Buff;
 
-#ifdef AS_SECONDARY_BOOTLOADER
-void flash_erase(addr_t); // asmfunc.S
-void flash_write(addr_t, const uint8_t*); // asmfunc.S
-#endif
-
 void flash_write_page(addr_t adr, const uint8_t* dat)
 {
+	addr_t i;
+	uint16_t j;
+	dbg_printf("fwp 0x%04X%04X\n", DBG32A(adr));
 	#ifdef AS_SECONDARY_BOOTLOADER
-	flash_erase(adr);
+	flash_page_wrapper(adr, dat);
 	#else
 	boot_spm_busy_wait();
 	boot_page_erase(adr);
 	boot_spm_busy_wait();
-	#endif
-	addr_t i;
-	uint16_t j;
-	#if defined(EANBLE_DEBUG) || !defined(AS_SECONDARY_BOOTLOADER)
-	for (i = adr, j = 0; j < SPM_PAGESIZE; i += 2, j += 2)
+	for (i = adr, j = 0; j < SPM_PAGESIZE; i += sizeof(uint16_t), j += sizeof(uint16_t))
 	{
-		#ifdef ENABLE_DEBUG
-		// validate that the erase worked
-		uint16_t r = pgm_read_word_at(i);
-		if (r != 0xFFFF) {
-			dbg_printf("erase fail @ 0x%04X%04X r 0x%04X\n", DBG32A(i), r);
-		}
-		#endif
-		#ifndef AS_SECONDARY_BOOTLOADER
 		boot_page_fill(i, *((uint16_t*)(&dat[j])));
-		#endif
+		boot_spm_busy_wait();
 	}
-	#endif
-	#ifdef AS_SECONDARY_BOOTLOADER
-	flash_write(adr, dat);
-	#else
 	boot_page_write(adr);
 	boot_spm_busy_wait();
 	boot_rww_enable();
-	boot_spm_busy_wait();
+	while (boot_rww_busy() || boot_spm_busy()) ;
 	#endif
 
 	// validate every byte
@@ -121,10 +103,13 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 			dbg_printf("veri fail @ 0x%04X%04X r 0x%04X != 0x%04X\n", DBG32A(i), r, m);
 			// erasing page 0 will invalidate the app, so it cannot be launched, preventing rogue code from causing damage
 			#ifdef AS_SECONDARY_BOOTLOADER
-			flash_erase(0);
+			memset(Buff, 0xFF, SPM_PAGESIZE);
+			flash_page_wrapper(0, dat);
 			#else
 			boot_page_erase(0);
 			boot_spm_busy_wait();
+			boot_rww_enable();
+			while (boot_rww_busy() || boot_spm_busy()) ;
 			#endif
 			while (1) {
 				LED_blink_pattern(0x83E1E39A);
@@ -163,7 +148,19 @@ int main(void)
 	}
 	#endif
 
+	Buff = (BYTE*)master_buffer;
+
 	dbg_init();
+	dbg_printf("\nBootloader ");
+
+	#ifdef TEST_FLASH
+	dbg_printf("TEST FLASH\n");
+	memset(Buff, 0xAA, SPM_PAGESIZE); // Clear buffer
+	flash_page_wrapper(0, Buff);
+	dbg_printf("DONE\n");
+	while (1) ;
+	#endif
+
 	sd_card_boot();
 	app_start();
 	while (1);
@@ -227,7 +224,7 @@ xjmp_t make_rjmp(addr_t src, addr_t dst)
 
 void check_reset_vector(void)
 {
-	volatile xjmp_t tmp1, tmp2;
+	xjmp_t tmp1, tmp2;
 	#ifdef VECTORS_USE_JMP
 	tmp1 = make_jmp(BOOT_ADR);
 	#elif defined(VECTORS_USE_RJMP)
@@ -236,9 +233,9 @@ void check_reset_vector(void)
 	tmp2 = pgm_read_xjmp(0);
 	if (tmp2 != tmp1)
 	{
-		dbg_printf("rst vec need OW ");
-		dbg_printf("read 0x%04X%04X ", DBGXJMP(tmp2));
-		dbg_printf("!= 0x%04X%04X\n", DBGXJMP(tmp1));
+		dbg_printf("rst vec need OW\n");
+		//dbg_printf("read 0x%04X%04X ", DBGXJMP(tmp2));
+		//dbg_printf("!= 0x%04X%04X\n", DBGXJMP(tmp1));
 		// this means existing flash will not activate the bootloader
 		// so we force a rewrite of this vector
 		memset(Buff, 0xFF, SPM_PAGESIZE); // Clear buffer
@@ -253,16 +250,10 @@ void sd_card_boot(void)
 {
 	dbg_printf("SD Card\n");
 
-	#ifndef AS_SECONDARY_BOOTLOADER
-	volatile char useless = 0;
-	if (useless) call_spm(0); // this forces the garbage collector to not collect it
-	#endif
-
 	DWORD fa; // Flash address
 	WORD br;  // Bytes read
 	DWORD bw; // Bytes written
 	WORD i;   // Index for page difference check
-	Buff = (BYTE*)master_buffer;
 	char canjump;
 
 	CARDDETECT_DDRx &= ~_BV(CARDDETECT_BIT); // pin as input
