@@ -107,6 +107,7 @@ extern void app_start(void);
 extern void LED_blink_pattern(uint32_t x);
 extern void dly_100us(void); // from asmfunc.S
 extern char can_jump(void);
+extern char can_write(void);
 extern void ser_putch(unsigned char);
 extern uint8_t ser_readch(void);
 extern uint8_t ser_readch_timeout(void);

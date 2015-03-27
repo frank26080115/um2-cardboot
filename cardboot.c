@@ -15,45 +15,12 @@
 / March 18, 2015
 /--------------------------------------------------------------------------/
 / Frank26080115 modified this bootloader for use as the Ultimaker2's bootloader
-/ The bootloader must be activated by several conditions
-/ * the card must be inserted
-/ * the file must exist
-/ * the button on the front of the UM2 must be held down at boot
-/ Some LED blinking as been added to indicate the bootloader status
-/ When the bootloader is ready, it will blink evenly and rapidly
-/ The user should then release the button, and the actual flash operations will start
-/ A flash write will only be performed if the new page does not match
-/ The final LED blink pattern indicates if anything new was written (3 blinks if yes, 1 blink if no)
-/ The UM2 must be manually reset to start the application
-/
-/ There are two ways this can be built
-/ 1) the default way simply merges the SD card bootloader with the STK500v2 bootloader
-/    and both will be deployed into the bootloader region
-/ 2) the original Arduino Mega 2560 STK500v2 bootloader resides in the bootloader region unmodified,
-/    some SPM instructions are injected into the end of the bootloader region,
-/    the SD card bootloader resides in the user app region just before the bootloader region,
-/    a "trampoline" is placed just before the SD card bootloader, used to launch the user app,
-/    the user app's reset vector is modified to launch the SD card bootloader
+/ See https://github.com/frank26080115/um2-cardboot/ for all information
 /
 /--------------------------------------------------------------------------/
 / Dec 6, 2010  R0.01  First release
 /--------------------------------------------------------------------------/
-/ This is a stand-alone MMC/SD boot loader for megaAVRs. It requires a 4KB
-/ boot section for code. To port the boot loader into your project, follow
-/ instructions described below.
-/
-/ 1. Setup the hardware. Attach a memory card socket to the any GPIO port
-/    where you like. Select boot size that is enough for the boot loader with
-/    BOOTSZ fuses and enable boot loader with BOOTRST fuse.
-/
-/ 2. Setup the software. Change the four port definitions in the asmfunc.S.
-/    Change MCU_TARGET, BOOT_ADR and MCU_FREQ in the Makefile. The BOOT_ADR
-/    is a BYTE address of boot section in the flash. Build the boot loader
-/    and write it to the device with a programmer.
-/
-/ 3. Build the application program and output it in binary form instead of
-/    hex format. Rename the file "APP.BIN" (all caps) and put it into the memory card.
-/
+/ http://elm-chan.org/fsw/ff/00index_p.html
 /-------------------------------------------------------------------------*/
 
 #include "main.h"
@@ -89,8 +56,12 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 	}
 	boot_page_write(adr);
 	boot_spm_busy_wait();
-	boot_rww_enable();
-	while (boot_rww_busy() || boot_spm_busy()) ;
+	do
+	{
+		boot_rww_enable();
+		boot_spm_busy_wait();
+	}
+	while (boot_rww_busy());
 	#endif
 
 	// validate every byte
@@ -108,8 +79,12 @@ void flash_write_page(addr_t adr, const uint8_t* dat)
 			#else
 			boot_page_erase(0);
 			boot_spm_busy_wait();
-			boot_rww_enable();
-			while (boot_rww_busy() || boot_spm_busy()) ;
+			do
+			{
+				boot_rww_enable();
+				boot_spm_busy_wait();
+			}
+			while (boot_rww_busy());
 			#endif
 			while (1) {
 				LED_blink_pattern(0x83E1E39A);
@@ -254,18 +229,30 @@ void sd_card_boot(void)
 	WORD br;  // Bytes read
 	DWORD bw; // Bytes written
 	WORD i;   // Index for page difference check
-	char canjump;
+	char canjump, canwrite;
 
 	CARDDETECT_DDRx &= ~_BV(CARDDETECT_BIT); // pin as input
 	CARDDETECT_PORTx |= _BV(CARDDETECT_BIT); // enable internal pull-up resistor
 	BUTTON_DDRx &= ~_BV(BUTTON_BIT); // pin as input
 	BUTTON_PORTx |= _BV(BUTTON_BIT); // enable internal pull-up resistor
 
+	canwrite = can_write();
+
 	#ifdef AS_SECONDARY_BOOTLOADER
 	char end_of_file = 0;
-	check_reset_vector();
+	if (canwrite) {
+		check_reset_vector();
+	}
 	#endif
 	canjump = can_jump();
+
+	if (!canwrite && BUTTON_PRESSED())
+	{
+		for (uint8_t blinks = 0; blinks < 4 || !canjump; blinks++) {
+			LED_blink_pattern(0x1138A);
+		}
+		app_start();
+	}
 
 	if (canjump)
 	{
@@ -442,9 +429,9 @@ void sd_card_boot(void)
 	{
 		dbg_printf("all done no W\n");
 		// single blink the LED to indicate that nothing was actually written
-		while (1) {
-			LED_blink_pattern(0x40002);
-		}
+		LED_blink_pattern(0x40002);
+		LED_blink_pattern(0x40002);
+		app_start();
 	}
 }
 
@@ -546,4 +533,18 @@ char can_jump(void)
 		return 1;
 	}
 	#endif
+}
+
+char can_write(void)
+{
+	// if we are in app region, check if the bootloader region has our injected spm function code
+	#ifdef AS_SECONDARY_BOOTLOADER
+	uint16_t insn;
+	insn = pgm_read_word_at(SPMFUNC_ADR);
+	if (insn == 0xFFFF || insn == 0x0000) {
+		dbg_printf("no way to write\n");
+		return 0;
+	}
+	#endif
+	return 1;
 }
