@@ -8,4 +8,4 @@ The original factory stock bootloader will still function, but not recommended t
 Please read the [Project Wiki](https://github.com/frank26080115/um2-cardboot/wiki) for
 * [Usage Instructions](https://github.com/frank26080115/um2-cardboot/wiki/Using-the-bootloader)
 * [Installation Instructions](https://github.com/frank26080115/um2-cardboot/wiki/Installation-Instructions)
-* [How the Bootloader Works](https://github.com/frank26080115/um2-cardboot/wiki/Using-the-bootloader)
+* [How the Bootloader Works](https://github.com/frank26080115/um2-cardboot/wiki/How-this-bootloader-works)
