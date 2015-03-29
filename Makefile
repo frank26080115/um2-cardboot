@@ -6,7 +6,7 @@
 USER_CURA_INSTALLATION_PATH ?= ./Cura
 USER_DESIRED_UM2_FW_NAME    ?= MarlinUltimaker2
 USER_UM2_SERIAL_PORT        ?= AUTO
-USER_AVRDUDE_OPTS           ?= -c STK500v2 -P COM8 -b 115200 -v
+USER_AVRDUDE_OPTS           ?= -c STK500v2 -P COM8 -b 115200
 
 
 
@@ -27,7 +27,7 @@ TARGET      = um2_cardboot
 CSRC        = cardboot.c pff.c mmcbbp.c
 ASRC        = asmfunc.S
 OPTIMIZE    = -Os -ffunction-sections -fpack-struct -fshort-enums -fno-move-loop-invariants -fno-inline-small-functions -mcall-prologues -fno-tree-scev-cprop -fno-jump-tables -mrelax
-DEFS        = -DF_CPU=$(F_CPU) -D_BOARD_$(BOARD)_=1 -DSPMFUNC_ADR=$(SPMFUNC_ADR)
+DEFS        = -DF_CPU=$(F_CPU) -D_BOARD_$(BOARD)_=1 -DSPMFUNC_ADR=$(SPMFUNC_ADR) -DDISABLE_BLINK
 LIBS        =
 DEBUG       = dwarf-2
 

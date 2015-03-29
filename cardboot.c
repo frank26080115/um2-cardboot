@@ -219,6 +219,7 @@ void __jumpMain(void)
 }
 #endif
 
+// quickly exit SD card stuff if STK500v2 needs to respond to a command
 #if defined(AS_SECONDARY_BOOTLOADER) || defined(ENABLE_DEBUG) || defined(DISABLE_STK500V2)
 #define CHECK_UART_FOR_STK500V2()
 #else
@@ -434,7 +435,9 @@ void sd_card_boot(void)
 
 		if (to_write) // write only if required
 		{
+			#ifndef DISABLE_BLINK
 			LED_TOG(); // blink the LED while writing
+			#endif
 			flash_write_page(fa, Buff);
 			bw += br;
 			dbg_printf("bytes written: %d\n", bw);

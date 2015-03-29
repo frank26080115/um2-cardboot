@@ -220,7 +220,11 @@ uint8_t ser_avail(void)
 //*****************************************************************************
 void ser_putch(unsigned char c)
 {
+	#ifndef DISABLE_BLINK
 	LED_TOG();
+	#else
+	LED_ON();
+	#endif
 	// wait for TX to finish
 	while (bit_is_clear(UCSRnA, UDREn)) {
 		chip_erase_task();
@@ -230,7 +234,9 @@ void ser_putch(unsigned char c)
 
 unsigned char ser_readch(void)
 {
+	#ifndef DISABLE_BLINK
 	LED_OFF();
+	#endif
 	#ifdef _FIX_ISSUE_181_
 	wdt_enable(WDTO_4S);
 	wdt_reset();
@@ -850,8 +856,12 @@ int main(void)
 			ser_putch(checksum);
 			seqNum++;
 
-		#ifndef REMOVE_BOOTLOADER_LED
+		#if !defined(REMOVE_BOOTLOADER_LED) && !defined(DISABLE_BLINK)
+		#ifndef DISABLE_BLINK
 			LED_TOG();
+		#else
+			LED_ON();
+		#endif
 		#endif
 
 			chip_erase_task();

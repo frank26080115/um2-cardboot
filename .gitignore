@@ -1,10 +1,12 @@
+Cura
+
 *.disasm
-*.bin
 *.map
 *.lst
 *.lss
 *.eep
 *.atsuo
+*.pyc
 
 # Object files
 *.o
