@@ -10,6 +10,15 @@
 ; the app region code can use spm by calling this function
 flash_page:
 	push	r0
+
+	; store original interrupt enabled bit
+	push	r17
+	in		r17, _SFR_IO_ADDR(SREG)
+	; interrupt is disabled, just so we do this atomically
+	; plus, if any interrupts are fired while RWW is disabled
+	; then things would screw up
+	cli
+
 	push	r1
 	push	ZH
 	push	ZL
@@ -113,7 +122,39 @@ wait_spm_4:
 	pop		ZL
 	pop		ZH
 	pop		r1
+	; restore SREG (for interrupt enable bit)
+	out		_SFR_IO_ADDR(SREG), r17
+	pop 	r17
 	pop		r0
+
+	; make sure the stack pointer has the correct return address
+	ret
+
+; add another faster backdoor that only uses r24 as a parameter
+.org (SPMFUNC_ADR + 0xC0)
+	sts		_SFR_MEM_ADDR(SPMCSR), r24
+	spm
+	; wait for write to complete
+wait_spm_5:
+	lds		r24, _SFR_MEM_ADDR(SPMCSR)
+	sbrc	r24, SPMEN
+	rjmp	wait_spm_5
+
+	; re-enable RWW region
+reen_rww_2:
+	ldi		r24, (_BV(SPMEN) | _BV(RWWSRE))
+	sts		_SFR_MEM_ADDR(SPMCSR), r24
+	spm
+
+	; wait for re-enable to complete
+wait_spm_6:
+	lds		r24, _SFR_MEM_ADDR(SPMCSR)
+	sbrc	r24, SPMEN
+	rjmp	wait_spm_6
+
+	; check that re-enable has succeeded
+	sbrc	r24, RWWSB
+	rjmp	reen_rww_2
 
 	; make sure the stack pointer has the correct return address
 	ret

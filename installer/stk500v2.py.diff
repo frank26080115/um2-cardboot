@@ -1,0 +1,40 @@
+83a84,88
+> 
+> 		# pad the data up to page boundary
+> 		while (len(flashData) % pageSize) != 0:
+> 			flashData.append(0xFF)
+> 
+90a96,106
+> 			# Frank26080115: we need to place code in front of the STK500v2 bootloader, and also behind it, but not on top of it
+> 			# So skip the bootloader region that we don't care about
+> 			if (i * pageSize) >= (flashSize - (1024 * 8)) and i < (loadCount - 1):
+> 				continue
+> 			# If we skipped stuff, then we need to set the address again
+> 			if i >= (loadCount - 1):
+> 				j = i * pageSize / 2
+> 				if flashSize > 0xFFFF:
+> 					self.sendMessage([0x06, 0x80 | (((j & 0xFF000000) >> (8 * 3)) & 0x7F), (((j & 0xFF0000) >> (8 * 2)) & 0xFF), (((j & 0xFF00) >> 8) & 0xFF), (j & 0xFF)])
+> 				else:
+> 					self.sendMessage([0x06, 0x00, 0x00, (((j & 0xFF00) >> 8) & 0xFF), (j & 0xFF)])
+99c115
+< 		if self._has_checksum:
+---
+> 		if self._has_checksum and len(flashData) < ((256 - 8) * 0x100):
+118a135,144
+> 				k = i * 0x100
+> 				j = k / 2
+> 				# skip the bootloader region that we don't care about
+> 				if k >= (flashSize - (1024 * 8)) and i < (loadCount - 1):
+> 					continue
+> 				if i >= (loadCount - 1):
+> 					if flashSize > 0xFFFF:
+> 						self.sendMessage([0x06, 0x80 | (((j & 0xFF000000) >> (8 * 3)) & 0x7F), (((j & 0xFF0000) >> (8 * 2)) & 0xFF), (((j & 0xFF00) >> 8) & 0xFF), (j & 0xFF)])
+> 					else:
+> 						self.sendMessage([0x06, 0x00, 0x00, (((j & 0xFF00) >> 8) & 0xFF), (j & 0xFF)])
+124c150,153
+< 						raise ispBase.IspError('Verify error at: 0x%x' % (i * 0x100 + j))
+---
+> 						if i < (loadCount - 1):
+> 							raise ispBase.IspError('Verification Error at: 0x%X' % (i * 0x100 + j))
+> 						else:
+> 							raise ispBase.IspError('Backdoor Code Injection Failed. Verification Error at: 0x%X' % (i * 0x100 + j))

@@ -124,10 +124,6 @@ LICENSE:
 //#define	REMOVE_CMD_SPI_MULTI				// disable processing of SPI_MULTI commands, Remark this line for AVRDUDE <Worapoht>
 //
 
-//#define		BLINK_LED_WHILE_WAITING
-
-#define	_BLINK_LOOP_COUNT_	(F_CPU / 2250)
-
 /*
  * HW and SW version, reported to AVRISP, must match version of AVRStudio
  */
@@ -160,16 +156,6 @@ LICENSE:
 #define	ST_GET_CHECK	6
 #define	ST_PROCESS		7
 
-//*****************************************************************************
-void delay_ms(unsigned int timedelay)
-{
-	unsigned int i;
-	for (i=0;i<timedelay;i++)
-	{
-		_delay_ms(0.5);
-	}
-}
-
 /*
 This fixes the problem of requiring -D with avrdude
 */
@@ -196,9 +182,45 @@ static void chip_erase_task(void)
 	}
 }
 
+uint32_t verify_checksum = 0;
+
+#ifdef USE_BUFFERED_SERIAL
+
+#define SERBUF_SIZE 128
+volatile uint8_t serbuf_read_ptr = 0;
+volatile uint8_t serbuf_write_ptr = 0;
+volatile uint8_t serbuf[SERBUF_SIZE];
+
+ISR(USARTn_RX_vect)
+{
+	uint8_t c = UDRn;
+	uint8_t next_ptr = (serbuf_write_ptr + 1) % SERBUF_SIZE;
+	if (next_ptr != serbuf_read_ptr) {
+		serbuf[serbuf_write_ptr] = c;
+		serbuf_write_ptr = next_ptr;
+	}
+}
+
+uint8_t ser_avail(void)
+{
+	cli();
+	/*
+	volatile uint16_t w = serbuf_write_ptr;
+	w += SERBUF_SIZE;
+	w -= serbuf_read_ptr;
+	w %= SERBUF_SIZE;
+	//*/
+	char w = (serbuf_write_ptr != serbuf_read_ptr);
+	sei();
+	return (uint8_t)w;
+}
+
+#endif
+
 //*****************************************************************************
 void ser_putch(unsigned char c)
 {
+	LED_TOG();
 	// wait for TX to finish
 	while (bit_is_clear(UCSRnA, UDREn)) {
 		chip_erase_task();
@@ -208,29 +230,28 @@ void ser_putch(unsigned char c)
 
 unsigned char ser_readch(void)
 {
-	while (bit_is_clear(UCSRnA, RXCn)) {
+	LED_OFF();
+	#ifdef _FIX_ISSUE_181_
+	wdt_enable(WDTO_4S);
+	wdt_reset();
+	#endif
+	while (ser_avail() == 0) {
 		chip_erase_task();
 	}
+	#ifdef _FIX_ISSUE_181_
+	wdt_reset();
+	wdt_disable();
+	#endif
+	LED_ON();
+	#ifdef USE_BUFFERED_SERIAL
+	cli();
+	uint8_t r = serbuf[serbuf_read_ptr];
+	serbuf_read_ptr = (serbuf_read_ptr + 1) % SERBUF_SIZE;
+	sei();
+	return r;
+	#else
 	return UDRn;
-}
-
-#define	MAX_TIME_COUNT	(F_CPU >> 1)
-unsigned char ser_readch_timeout(void)
-{
-	volatile uint32_t count = 0;
-
-	while (bit_is_clear(UCSRnA, RXCn))
-	{
-		// wait for data
-		count++;
-		if (count > MAX_TIME_COUNT)
-		{
-			dbg_printf("timeout rx\n");
-			app_start();
-		}
-		chip_erase_task();
-	}
-	return UDRn;
+	#endif
 }
 
 //*****************************************************************************
@@ -251,9 +272,6 @@ int main(void)
 	unsigned long	boot_timer;
 	unsigned int	boot_state;
 
-	chipEraseRequested = 0;
-	eraseAddress = 0;
-
 	#ifdef _FIX_STACK_POINTER_2_
 	//	some chips dont set the stack properly
 	asm volatile ( ".set __stack, %0" :: "i" (RAMEND) );
@@ -270,7 +288,7 @@ int main(void)
 	uint8_t	mcuStatusReg;
 	mcuStatusReg	=	MCUSR;
 
-	__asm__ __volatile__ ("cli");
+	cli();
 	MCUSR	=	0;
 	wdt_disable();
 	// check if WDT generated the reset, if so, go straight to app
@@ -280,11 +298,34 @@ int main(void)
 	//************************************************************************
 #endif
 
-	boot_timeout	=	30;
+	chipEraseRequested = 0;
+	eraseAddress = 0;
+
+	if (can_jump()) {
+		boot_timeout	=	600;
+	}
+	else {
+		boot_timeout	=	0xFFFF;
+	}
 
 	/*
-	 * Branch to bootloader or application code ?
+	 * Init UART
+	 * set baudrate and enable USART receiver and transmitter without interrupts
 	 */
+	UCSRnA = _BV(U2Xn);
+	UBRRn  = 16; // 115200 baud
+	UCSRnC = _BV(USBSn) | _BV(UCSZn1) | _BV(UCSZn0);
+	UCSRnB = _BV(TXENn) | _BV(RXENn)
+	#ifdef USE_BUFFERED_SERIAL
+		| _BV(RXCIEn)
+	#endif
+	;
+	#ifdef USE_BUFFERED_SERIAL
+	serbuf_read_ptr = 0; serbuf_write_ptr = 0;
+	MCUCR = (1 << IVCE);
+	MCUCR = (1 << IVSEL);
+	sei();
+	#endif
 
 #ifndef REMOVE_BOOTLOADER_LED
 	LED_DDRx	|=	_BV(LED_BIT);
@@ -294,27 +335,23 @@ int main(void)
 	for (ii=0; ii<3; ii++)
 	{
 		LED_OFF();
-		delay_ms(100);
+		_delay_ms(100);
 		LED_ON();
-		delay_ms(100);
+		_delay_ms(100);
 	}
 #endif
 
 #endif
-	/*
-	 * Init UART
-	 * set baudrate and enable USART receiver and transmiter without interrupts
-	 */
-	UCSRnA = _BV(U2Xn);
-	UBRRn  = 16; // 115200 baud
-	UCSRnC = _BV(USBSn) | _BV(UCSZn1) | _BV(UCSZn0);
-	UCSRnB = _BV(TXENn) | _BV(RXENn);
 
 	dbg_printf("\nUM2 Combo Bootloader\n");
 
 	sd_card_boot(); // this will never return if activated
 
 	dbg_printf("STK500v2\n");
+
+	#ifdef DISABLE_STK500V2
+	while (1);
+	#endif
 
 	boot_timer	=	0;
 	boot_state	=	0;
@@ -323,25 +360,24 @@ int main(void)
 	{
 		while (ser_avail() == 0 && (boot_state == 0)) // wait for data
 		{
-			delay_ms(100);
+			_delay_ms(1);
 			boot_timer++;
 			if (boot_timer > boot_timeout)
 			{
-				boot_state	=	1; // (after ++ -> boot_state=2 bootloader timeout, jump to main 0x00000 )
+				boot_state	=	1;
 			}
-			#ifdef BLINK_LED_WHILE_WAITING
-			LED_TOG();
-			#endif
 		}
 		boot_state++; // ( if boot_state=1 bootloader received byte from UART, enter bootloader mode)
 	}
 
 	if (boot_state == 1)
 	{
-		c = UDRn;
+		c = ser_readch();
 
 		while (!isLeave)
 		{
+			LED_ON();
+
 			/*
 			 * Collect received bytes to a complete message
 			 */
@@ -354,8 +390,7 @@ int main(void)
 				}
 				else
 				{
-				//	c	=	ser_readch();
-					c	=	ser_readch_timeout();
+					c	=	ser_readch();
 				}
 
 				switch (msgParseState)
@@ -648,7 +683,8 @@ int main(void)
 					chipEraseRequested = 0;
 				case CMD_PROGRAM_EEPROM_ISP:
 					{
-						unsigned int	size	=	((msgBuffer[1])<<8) | msgBuffer[2];
+						uint16_t		size		=	((msgBuffer[1])<<8) | msgBuffer[2];
+						uint16_t		actualSize	=	msgLength - 10; // Ultimaker's stupid python doesn't send the whole page, the message length is the truly reliable indicator of how many bytes, this is important for checksumming
 						unsigned char	*p	=	msgBuffer+10;
 						unsigned int	data;
 						unsigned char	highByte, lowByte;
@@ -657,28 +693,53 @@ int main(void)
 						if ( msgBuffer[0] == CMD_PROGRAM_FLASH_ISP )
 						{
 							// erase only main section (bootloader protection)
-							if (eraseAddress < APP_END )
+							if (eraseAddress < APP_END
+							#ifdef SPMFUNC_ADR
+							 || eraseAddress >= SPMFUNC_ADR
+							#endif
+							)
 							{
 								boot_page_erase(eraseAddress);	// Perform page erase
 								boot_spm_busy_wait();			// Wait until the memory is erased.
-								eraseAddress += SPM_PAGESIZE;	// point to next page to be erase
+							}
+							eraseAddress += SPM_PAGESIZE;	// point to next page to be erase
+
+							if (address == 0) {
+								verify_checksum = 0;
 							}
 
-							/* Write FLASH */
-							do {
-								lowByte		=	*p++;
-								highByte 	=	*p++;
+							if (address < APP_END
+							#ifdef SPMFUNC_ADR
+							 || address >= SPMFUNC_ADR
+							#endif
+							)
+							{
+								/* Write FLASH */
+								do {
+									if (actualSize > 0)
+									{
+										lowByte  = *p++;
+										highByte = *p++;
+										verify_checksum += lowByte;
+										verify_checksum += highByte;
+										actualSize -= 2;
+										data = (highByte << 8) | lowByte;
+									}
+									else
+									{
+										data = 0xFFFF;
+									}
 
-								data		=	(highByte << 8) | lowByte;
-								boot_page_fill(address,data);
+									boot_page_fill(address,data);
 
-								address	=	address + 2;	// Select next word in memory
-								size	-=	2;				// Reduce number of bytes to write by two
-							} while (size);					// Loop until all bytes written
+									address	=	address + 2;	// Select next word in memory
+									size	-=	2;				// Reduce number of bytes to write by two
+								} while (size);					// Loop until all bytes written
 
-							boot_page_write(tempaddress);
-							boot_spm_busy_wait();
-							boot_rww_enable();				// Re-enable the RWW section
+								boot_page_write(tempaddress);
+								boot_spm_busy_wait();
+								boot_rww_enable();				// Re-enable the RWW section
+							}
 						}
 						else
 						{
@@ -741,6 +802,15 @@ int main(void)
 						*p++	=	STATUS_CMD_OK;
 					}
 					break;
+
+				#ifdef SUPPORT_CHECKSUM
+				case 0xEE: // checksum function is available
+					msgLength		=	4;
+					msgBuffer[1]	=	STATUS_CMD_OK;
+					msgBuffer[2]	=	((uint8_t*)&verify_checksum)[0];
+					msgBuffer[3]	=	((uint8_t*)&verify_checksum)[1];
+					break;
+				#endif
 
 				default:
 					msgLength		=	2;

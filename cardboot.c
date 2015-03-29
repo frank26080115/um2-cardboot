@@ -34,9 +34,9 @@
 #include "pff.h"
 #include "debug.h"
 
-FATFS Fatfs;
+static FATFS CardFs;
 uint8_t master_buffer[SPM_PAGESIZE * 2];
-BYTE* Buff;
+static BYTE* Buff;
 
 void flash_write_page(addr_t adr, const uint8_t* dat)
 {
@@ -123,8 +123,6 @@ int main(void)
 	}
 	#endif
 
-	Buff = (BYTE*)master_buffer;
-
 	dbg_init();
 	dbg_printf("\nBootloader ");
 
@@ -141,36 +139,6 @@ int main(void)
 	while (1);
 	return 0;
 }
-
-#ifdef _FIX_STACK_POINTER_1_
-/*
- * since this bootloader is not linked against the avr-gcc crt1 functions,
- * to reduce the code size, we need to provide our own initialization
- */
-
-//#define	SPH_REG	0x3E
-//#define	SPL_REG	0x3D
-
-void __jumpMain(void)
-{
-//	July 17, 2010	<MLS> Added stack pointer initialzation
-//	the first line did not do the job on the ATmega128
-
-	asm volatile ( ".set __stack, %0" :: "i" (RAMEND) );
-
-//	set stack pointer to top of RAM
-
-	asm volatile ( "ldi	16, %0" :: "i" (RAMEND >> 8) );
-	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_HI_ADDR) );
-
-	asm volatile ( "ldi	16, %0" :: "i" (RAMEND & 0x0ff) );
-	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_LO_ADDR) );
-
-	asm volatile ( "clr __zero_reg__" );									// GCC depends on register r1 set to 0
-	asm volatile ( "out %0, __zero_reg__" :: "I" (_SFR_IO_ADDR(SREG)) );	// set SREG to 0
-	asm volatile ( "jmp main");												// jump to main()
-}
-#endif
 
 #ifdef VECTORS_USE_JMP
 xjmp_t make_jmp(addr_t x)
@@ -221,9 +189,49 @@ void check_reset_vector(void)
 
 #endif
 
+#ifdef _FIX_STACK_POINTER_1_
+/*
+ * since this bootloader is not linked against the avr-gcc crt1 functions,
+ * to reduce the code size, we need to provide our own initialization
+ */
+
+//#define	SPH_REG	0x3E
+//#define	SPL_REG	0x3D
+
+void __jumpMain(void)
+{
+//	July 17, 2010	<MLS> Added stack pointer initialzation
+//	the first line did not do the job on the ATmega128
+
+	asm volatile ( ".set __stack, %0" :: "i" (RAMEND) );
+
+//	set stack pointer to top of RAM
+
+	asm volatile ( "ldi	16, %0" :: "i" (RAMEND >> 8) );
+	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_HI_ADDR) );
+
+	asm volatile ( "ldi	16, %0" :: "i" (RAMEND & 0x0ff) );
+	asm volatile ( "out %0,16"  :: "i" (AVR_STACK_POINTER_LO_ADDR) );
+
+	asm volatile ( "clr __zero_reg__" );									// GCC depends on register r1 set to 0
+	asm volatile ( "out %0, __zero_reg__" :: "I" (_SFR_IO_ADDR(SREG)) );	// set SREG to 0
+	asm volatile ( "jmp main");												// jump to main()
+}
+#endif
+
+#if defined(AS_SECONDARY_BOOTLOADER) || defined(ENABLE_DEBUG) || defined(DISABLE_STK500V2)
+#define CHECK_UART_FOR_STK500V2()
+#else
+#define CHECK_UART_FOR_STK500V2() do { if (ser_avail() != 0) return; } while (0)
+#endif
+
 void sd_card_boot(void)
 {
 	dbg_printf("SD Card\n");
+
+	#ifdef DISABLE_CARDBOOT
+	return;
+	#endif
 
 	DWORD fa; // Flash address
 	WORD br;  // Bytes read
@@ -231,20 +239,36 @@ void sd_card_boot(void)
 	WORD i;   // Index for page difference check
 	char canjump, canwrite;
 
+	CHECK_UART_FOR_STK500V2();
+
 	CARDDETECT_DDRx &= ~_BV(CARDDETECT_BIT); // pin as input
 	CARDDETECT_PORTx |= _BV(CARDDETECT_BIT); // enable internal pull-up resistor
 	BUTTON_DDRx &= ~_BV(BUTTON_BIT); // pin as input
 	BUTTON_PORTx |= _BV(BUTTON_BIT); // enable internal pull-up resistor
 
+	CHECK_UART_FOR_STK500V2();
 	canwrite = can_write();
+	CHECK_UART_FOR_STK500V2();
 
 	#ifdef AS_SECONDARY_BOOTLOADER
 	char end_of_file = 0;
 	if (canwrite) {
 		check_reset_vector();
 	}
+	#else
+	#ifndef FORCE_CARD
+	if (!BUTTON_PRESSED()) {
+		dbg_printf("no btn, stk time\n");
+		return;
+	}
 	#endif
+	#endif
+
+	#ifndef FORCE_CARD
+
+	CHECK_UART_FOR_STK500V2();
 	canjump = can_jump();
+	CHECK_UART_FOR_STK500V2();
 
 	if (!canwrite && BUTTON_PRESSED())
 	{
@@ -254,11 +278,14 @@ void sd_card_boot(void)
 		app_start();
 	}
 
+	CHECK_UART_FOR_STK500V2();
+
 	if (canjump)
 	{
 		#ifndef ENABLE_DEBUG
 		dly_100us(); // only done to wait for signals to rise
 		#endif
+		CHECK_UART_FOR_STK500V2();
 		if (!CARD_DETECTED()) {
 			dbg_printf("no card\n");
 			return;
@@ -277,24 +304,18 @@ void sd_card_boot(void)
 	#endif
 	}
 
-	FRESULT fres;
-	#ifdef ENABLE_DEBUG
-	fres = 
+	CHECK_UART_FOR_STK500V2();
 	#endif
-	pf_mount(&Fatfs); // Initialize file system
-	#ifdef ENABLE_DEBUG
-	if (fres != FR_OK)
+
+	char canfile = try_open_file("APP.BIN", 3);
+
+	if (canfile == 0)
 	{
-		dbg_printf("fs mnt ERR 0x%02X\n", fres);
-	}
-	#endif
-	fres = pf_open("APP.BIN");
-	if (fres != FR_OK) // Open application file
-	{
-		dbg_printf("file open ERR 0x%02X\n", fres);
-		while (1) {
+		char was_btn = BUTTON_PRESSED();
+		for (uint8_t blinks = 0; blinks < 4 || was_btn; blinks++) {
 			LED_blink_pattern(0xB38F0F82);
 		}
+		return;
 	}
 
 	LED_ON();
@@ -315,6 +336,9 @@ void sd_card_boot(void)
 	}
 	#endif
 
+	dbg_printf("start card read\n");
+
+	Buff = (BYTE*)master_buffer;
 	for (fa = 0, bw = 0; fa < BOOT_ADR; fa += SPM_PAGESIZE) // Update all application pages
 	{
 		memset(Buff, 0xFF, SPM_PAGESIZE); // Clear buffer
@@ -395,7 +419,7 @@ void sd_card_boot(void)
 
 			for (i = 0; i < SPM_PAGESIZE && to_write == 0; i++)
 			{ // check if the page has differences
-				if (pgm_read_byte_at(fa) != Buff[i])
+				if (pgm_read_byte_at(fa + i) != Buff[i])
 				{
 					to_write = 1;
 				}
@@ -435,6 +459,37 @@ void sd_card_boot(void)
 	}
 }
 
+char try_open_file(const char* fname, uint8_t retries)
+{
+	if (retries <= 0) retries = 1;
+
+	uint8_t attempts;
+	FRESULT fres;
+
+	for (attempts = 0; attempts < retries; attempts++)
+	{
+		fres = pf_mount(&CardFs); // Initialize file system
+		if (fres == FR_OK)
+		{
+			fres = pf_open(fname);
+			if (fres == FR_OK) // Open application file
+			{
+				dbg_printf("file openned\n");
+				return 1;
+			}
+			else
+			{
+				dbg_printf("file open ERR 0x%02X\n", fres);
+			}
+		}
+		else
+		{
+			dbg_printf("fs mnt ERR 0x%02X\n", fres);
+		}
+	}
+	return 0;
+}
+
 void app_start(void)
 {
 	char canjump = can_jump();
@@ -444,15 +499,19 @@ void app_start(void)
 	}
 	else {
 		dbg_printf("no app\n");
-	}
-
-	// long blink to indicate blank app
-	while (!canjump)
-	{
-		LED_blink_pattern(0x87FF);
+		// long blink to indicate blank app
+		while (1) {
+			LED_blink_pattern(0x87FF);
+		}
 	}
 
 	dbg_deinit();
+
+	#ifdef USE_BUFFERED_SERIAL
+	MCUCR = (1 << IVCE);	// enable change of interrupt vectors
+	MCUCR = (0 << IVSEL);	// move interrupts to app flash section
+	cli();
+	#endif
 
 	#ifdef AS_SECONDARY_BOOTLOADER
 		// there is an instruction stored here (trampoline), jump here and execute it

@@ -14,7 +14,7 @@
 #define	_USE_LSEEK	0	/* Enable pf_lseek() function */
 #define	_USE_WRITE	0	/* Enable pf_write() function */
 
-#define _FS_FAT12	0	/* Enable FAT12 */
+#define _FS_FAT12	1	/* Enable FAT12 */
 #define _FS_FAT16	1	/* Enable FAT16 */
 #define _FS_FAT32	1	/* Enable FAT32 */
 

@@ -6,15 +6,16 @@
 USER_CURA_INSTALLATION_PATH ?= ./Cura
 USER_DESIRED_UM2_FW_NAME    ?= MarlinUltimaker2
 USER_UM2_SERIAL_PORT        ?= AUTO
+USER_AVRDUDE_OPTS           ?= -c STK500v2 -P COM8 -b 115200 -v
 
-# Warning, the make file is not perfectly automatic yet
+
 
 MCU_TARGET  = atmega2560
 F_CPU       = 16000000
 MCU_ARCH    = avr6
 BOARD       = ULTIMAKER2
 
-AS_SECONDARY_BOOTLOADER ?= 1
+AS_SECONDARY_BOOTLOADER ?= 0
 
 # the start address of the actual bootloader region
 PRI_BOOT_ADR ?= 0x3E000
@@ -25,7 +26,7 @@ SPMFUNC_ADR ?= 0x3FF00
 TARGET      = um2_cardboot
 CSRC        = cardboot.c pff.c mmcbbp.c
 ASRC        = asmfunc.S
-OPTIMIZE    = -Os -ffunction-sections -fpack-struct -fshort-enums -fno-move-loop-invariants -fno-inline-small-functions -mcall-prologues -mrelax -fno-tree-scev-cprop -fno-jump-tables
+OPTIMIZE    = -Os -ffunction-sections -fpack-struct -fshort-enums -fno-move-loop-invariants -fno-inline-small-functions -mcall-prologues -fno-tree-scev-cprop -fno-jump-tables -mrelax
 DEFS        = -DF_CPU=$(F_CPU) -D_BOARD_$(BOARD)_=1 -DSPMFUNC_ADR=$(SPMFUNC_ADR)
 LIBS        =
 DEBUG       = dwarf-2
@@ -61,6 +62,7 @@ AS          = avr-as
 OBJCOPY     = avr-objcopy
 OBJDUMP     = avr-objdump
 SIZE        = avr-size
+AVRDUDE     = avrdude
 
 CURA_DIR   = $(USER_CURA_INSTALLATION_PATH)
 UM2FW_DIR  = $(CURA_DIR)/resources/firmware
@@ -70,13 +72,11 @@ UM2FW = $(basename $(notdir $(UM2FW_PATH)))
 BOOTFW ?= $(TARGET)
 BOOT_ADR_HEX = $(strip $(subst 0x,,$(BOOT_ADR)))
 
-ALL_TARGETS = $(TARGET).hex $(UM2FW)-cardboot-firstinstall.hex $(UM2FW)-cardboot.hex $(UM2FW).APP.BIN size
+ALL_TARGETS = $(TARGET).hex $(UM2FW)-cardboot.hex $(TARGET)_withspmfunc.hex $(UM2FW).APP.BIN size
 ifeq ($(AS_SECONDARY_BOOTLOADER),1)
-ALL_TARGETS += $(TARGET)_withspmfunc.hex
+ALL_TARGETS += $(UM2FW)-cardboot-firstinstall.hex
 endif
-ifdef TESTBUILD
-ALL_TARGETS += $(TARGET).lst $(UM2FW)-cardboot.lst $(UM2FW)-cardboot-firstinstall.lst
-endif
+
 all: $(ALL_TARGETS)
 
 clean:
@@ -136,6 +136,14 @@ $(TARGET).elf: $(OBJS)
 SPMFUNCADR_HIGH_FIND = echo $(SPMFUNC_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F])[0-9a-fA-F]{4}\s*?$$/\U\1/p"
 SPMFUNCADR_LOW_FIND  = echo $(SPMFUNC_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F]{2})[0-9a-fA-F]{2}\s*?$$/\U\1/p"
 
+$(BOOTFW)_nospmfunc.hex: $(BOOTFW).elf
+	$(OBJCOPY) -j .text -j .data -j .fuse -j .bootloader -O ihex $< $@
+
+$(BOOTFW)_withspmfunc.hex: $(BOOTFW)_nospmfunc.hex spmfunc.o spmfunc.hex
+	cat $< | grep -v ":00000001FF" > $@
+	cat spmfunc.hex | grep -E "^(:02000002$(shell $(SPMFUNCADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:[0-9A-F]{2}$(shell $(SPMFUNCADR_LOW_FIND))[0-9A-F]{2}00)" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
+	echo ":00000001FF" >> $@
+
 ifeq ($(AS_SECONDARY_BOOTLOADER),1)
 
 # The code below takes an existing firmware (for the Ultimaker2) and attaches the SD card bootloader to it
@@ -181,34 +189,26 @@ retargeted.asm: $(UM2FW).reasm
 TRAMPADR_HIGH_FIND   = echo $(TRAMPOLINE_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F])[0-9a-fA-F]{4}\s*?$$/\U\1/p"
 TRAMPADR_LOW_FIND    = echo $(TRAMPOLINE_ADR) | sed -n -r "s/^\s*?0x[0-9a-fA-F]*?([0-9a-fA-F]{2})[0-9a-fA-F]{2}\s*?$$/\U\1/p"
 
-$(BOOTFW)_nospmfunc.hex: $(BOOTFW).elf
-	$(OBJCOPY) -j .text -j .data -j .fuse -j .bootloader -O ihex $< $@
-
-$(BOOTFW)_withspmfunc.hex: $(BOOTFW)_nospmfunc.hex spmfunc.o spmfunc.hex
-	cat $< | grep -v ":00000001FF" > $@
-	cat spmfunc.hex | grep -E "^(:02000002$(shell $(SPMFUNCADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:[0-9A-F]{2}$(shell $(SPMFUNCADR_LOW_FIND))[0-9A-F]{2}00)" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
-
 $(UM2FW)-cardboot.hex: retargeted.hex $(UM2FW_PATH).hex trampoline.hex $(BOOTFW)_nospmfunc.hex
 	head -n 1 retargeted.hex > $@
 	tail -n +2 $(UM2FW_PATH).hex | grep -v ":00000001FF" >> $@
 	cat trampoline.hex | grep -E "^(:02000002$(shell $(TRAMPADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:[0-9A-F]{2}$(shell $(TRAMPADR_LOW_FIND))[0-9A-F]{2}00)" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
 	cat $(BOOTFW)_nospmfunc.hex | grep -v ":00000001FF" >> $@
+	echo ":00000001FF" >> $@
 
 $(UM2FW)-cardboot-firstinstall.hex: $(UM2FW)-cardboot.hex spmfunc.o spmfunc.hex
 	cat $< | grep -v ":00000001FF" > $@
 	cat spmfunc.hex | grep -E "^(:02000002$(shell $(SPMFUNCADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:[0-9A-F]{2}$(shell $(SPMFUNCADR_LOW_FIND))[0-9A-F]{2}00)" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
+	echo ":00000001FF" >> $@
 
 else
 
 # the "end of file" indicator is removed
 # blank space is removed
 # spm function is appended to the absolute end
-$(UM2FW)-cardboot.hex: $(UM2FW_PATH).hex $(BOOTFW).hex spmfunc.o spmfunc.hex
-	cat $(UM2FW_PATH).hex $(BOOTFW).hex | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" > $@
-	cat spmfunc.hex | grep -E "^(:02000002$(shell $(SPMFUNCADR_HIGH_FIND))000[0-9A-F]{2}$$)|(:[0-9A-F]{2}$(shell $(SPMFUNCADR_LOW_FIND))[0-9A-F]{2}00)" | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" >> $@
-
-$(UM2FW)-cardboot-firstinstall.hex: $(UM2FW)-cardboot.hex
-	cp -f $< $@
+$(UM2FW)-cardboot.hex: $(UM2FW_PATH).hex $(BOOTFW)_withspmfunc.hex
+	cat $^ | grep -v -E "^:10[0-9A-F]*?(0|F){32}[0-9A-F]{2}$$" | grep -v ":00000001FF" > $@
+	echo ":00000001FF" >> $@
 
 endif
 
@@ -222,42 +222,17 @@ appbin: $(UM2FW).APP.BIN
 
 PROG_PORT ?= $(USER_UM2_SERIAL_PORT)
 
-ifeq ($(AS_SECONDARY_BOOTLOADER),1)
 # installation must be done through a Python script that skips the original bootloader memory
-
-firstinstall: ./release/$(UM2FW)-cardboot-firstinstall.hex
-	cp -f $< $(notdir $<)
-	$(CURA_DIR)/python/python.exe ./installer/stk500v2.py $(PROG_PORT) $(notdir $<)
 
 firstinstall: $(UM2FW)-cardboot-firstinstall.hex
 	$(CURA_DIR)/python/python.exe ./installer/stk500v2.py $(PROG_PORT) $<
 
-otherinstall: ./release/$(UM2FW)-cardboot.hex
-	cp -f $< $(notdir $<)
-	$(CURA_DIR)/python/python.exe ./installer/stk500v2.py $(PROG_PORT) $(notdir $<)
-
-otherinstall: $(UM2FW)-cardboot.hex
+updateinstall: $(UM2FW)-cardboot.hex
 	$(CURA_DIR)/python/python.exe ./installer/stk500v2.py $(PROG_PORT) $<
 
-else
-# avrdude can be used to flash the bootloader
+AVRDUDE_OPTS = $(USER_AVRDUDE_OPTS)
 
-AVRDUDE   = avrdude
-PROG_PORT = COM6
-PROG_TOOL = STK500v2
-PROG_BAUD = 115200
-DUDE_OPTS =
-# the -D option might be required if using the default Arduino Mega 2560 stock bootloader
-
-flash: $(TARGET).hex
-	$(AVRDUDE) -c$(PROG_TOOL) -p$(MCU_TARGET) -P$(PROG_PORT) -b$(PROG_BAUD) $(DUDE_OPTS) -Uflash:w:$<:i
-
-flashmerged: $(UM2FW)-cardboot.hex
-	$(AVRDUDE) -c$(PROG_TOOL) -p$(MCU_TARGET) -P$(PROG_PORT) -b$(PROG_BAUD) $(DUDE_OPTS) -Uflash:w:$<:i
-
-flashmerged: ./release/$(UM2FW)-cardboot.hex
-	$(AVRDUDE) -c$(PROG_TOOL) -p$(MCU_TARGET) -P$(PROG_PORT) -b$(PROG_BAUD) $(DUDE_OPTS) -Uflash:w:$<:i
-
-endif
+ispinstall: $(UM2FW)-cardboot.hex
+	$(AVRDUDE) -p$(MCU_TARGET) $(AVRDUDE_OPTS) -Uflash:w:$<:i
 
 include build_helper.mk

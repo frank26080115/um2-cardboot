@@ -86,7 +86,24 @@
 #define UCSZn1 UCSZ01
 #define U2Xn   U2X0
 #define RXCn   RXC0
+#define TXCn   TXC0
 #define USBSn  USBS0
+#define RXCIEn RXCIE0
+#define USARTn_RX_vect USART0_RX_vect
+
+#ifndef AS_SECONDARY_BOOTLOADER
+#define USE_BUFFERED_SERIAL
+#endif
+
+#ifdef USE_BUFFERED_SERIAL
+#if (BOOT_ADR < PRI_BOOT_ADR)
+#error cannot use buffered UART if not compiling into primary bootloader region
+#endif
+#endif
+
+#ifdef _BOARD_ULTIMAKER2_
+#define SUPPORT_CHECKSUM
+#endif
 
 //************************************************************************
 //*	these are used to test issues
@@ -98,11 +115,12 @@
 #define	_FIX_ISSUE_505_
 //************************************************************************
 //*	Issue 181: added watch dog timer support
-//#define	_FIX_ISSUE_181_
+#define	_FIX_ISSUE_181_
 #define	_FIX_STACK_POINTER_1_
 //#define	_FIX_STACK_POINTER_2_
 
 extern void sd_card_boot(void);
+extern char try_open_file(const char* fname, uint8_t retries);
 extern void app_start(void);
 extern void LED_blink_pattern(uint32_t x);
 extern void dly_100us(void); // from asmfunc.S
@@ -111,7 +129,11 @@ extern char can_write(void);
 extern void ser_putch(unsigned char);
 extern uint8_t ser_readch(void);
 extern uint8_t ser_readch_timeout(void);
+#ifdef USE_BUFFERED_SERIAL
+extern uint8_t ser_avail(void);
+#else
 #define ser_avail() bit_is_set(UCSRnA, RXCn)
+#endif
 extern void flash_write_page(addr_t adr, const uint8_t* dat);
 extern void flash_page_wrapper(addr_t, const uint8_t*); // asmfunc.S
 #ifndef AS_SECONDARY_BOOTLOADER

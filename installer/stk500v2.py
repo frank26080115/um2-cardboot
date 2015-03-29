@@ -112,8 +112,7 @@ class Stk500v2(ispBase.IspBase):
 					self.progressCallback(i + 1, loadCount*2)
 
 	def verifyFlash(self, flashData):
-		if self._has_checksum:
-			raise ispBase.IspError("Checksum required but unsupported") # Frank26080115: since we are skipping over an unknown region, we can't use checksums
+		if self._has_checksum and len(flashData) < ((256 - 8) * 0x100):
 			self.sendMessage([0x06, 0x00, (len(flashData) >> 17) & 0xFF, (len(flashData) >> 9) & 0xFF, (len(flashData) >> 1) & 0xFF])
 			res = self.sendMessage([0xEE])
 			checksum_recv = res[2] | (res[3] << 8)
@@ -148,7 +147,10 @@ class Stk500v2(ispBase.IspBase):
 					self.progressCallback(loadCount + i + 1, loadCount*2)
 				for j in xrange(0, 0x100):
 					if i * 0x100 + j < len(flashData) and flashData[i * 0x100 + j] != recv[j]:
-						raise ispBase.IspError('Verify error at: 0x%x' % (i * 0x100 + j))
+						if i < (loadCount - 1):
+							raise ispBase.IspError('Verification Error at: 0x%X' % (i * 0x100 + j))
+						else:
+							raise ispBase.IspError('Backdoor Code Injection Failed. Verification Error at: 0x%X' % (i * 0x100 + j))
 
 	def sendMessage(self, data):
 		message = struct.pack(">BBHB", 0x1B, self.seq, len(data), 0x0E)

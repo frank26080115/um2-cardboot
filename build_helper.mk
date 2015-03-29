@@ -1,24 +1,26 @@
 BUILDLOG = buildlog.txt
 
+TESTBUILD_TARGETS = $(TARGET).hex $(UM2FW)-cardboot.hex $(TARGET).lst $(UM2FW)-cardboot.lst
+
 testbuild:
 	@echo "test build config default" | tee $(BUILDLOG)
-	@make clean all AS_SECONDARY_BOOTLOADER=0 TESTBUILD=1 | tee -a $(BUILDLOG)
+	@make clean $(TESTBUILD_TARGETS) size AS_SECONDARY_BOOTLOADER=0 TESTBUILD=1 | tee -a $(BUILDLOG)
 	@mkdir -p testbuild_default
-	@mv $(TARGET).hex $(TARGET).lst $(UM2FW)-cardboot.hex $(UM2FW)-cardboot.lst ./testbuild_default/
+	@mv $(TESTBUILD_TARGETS) ./testbuild_default/
 	@echo "test build config default debug" | tee -a $(BUILDLOG)
-	@make clean all AS_SECONDARY_BOOTLOADER=0 ENABLE_DEBUG=1 TESTBUILD=1 | tee -a $(BUILDLOG)
+	@make clean $(TESTBUILD_TARGETS) size AS_SECONDARY_BOOTLOADER=0 ENABLE_DEBUG=1 TESTBUILD=1 | tee -a $(BUILDLOG)
 	@mkdir -p testbuild_default_debug
-	@mv $(TARGET).hex $(TARGET).lst $(UM2FW)-cardboot.hex $(UM2FW)-cardboot.lst ./testbuild_default_debug/
+	@mv $(TESTBUILD_TARGETS) ./testbuild_default_debug/
 	@echo "test build config as_secondary" | tee -a $(BUILDLOG)
-	@make clean all AS_SECONDARY_BOOTLOADER=1 TESTBUILD=1 | tee -a $(BUILDLOG)
+	@make clean $(TESTBUILD_TARGETS) size $(UM2FW)-cardboot-firstinstall.lst AS_SECONDARY_BOOTLOADER=1 TESTBUILD=1 | tee -a $(BUILDLOG)
 	@mkdir -p testbuild_secondary
-	@mv $(TARGET).hex $(TARGET).lst $(UM2FW)-cardboot-firstinstall.hex $(UM2FW)-cardboot-firstinstall.lst ./testbuild_secondary/
+	@mv $(TESTBUILD_TARGETS) $(UM2FW)-cardboot-firstinstall.hex $(UM2FW)-cardboot-firstinstall.lst ./testbuild_secondary/
 	@echo "test build config as_secondary debug" | tee -a $(BUILDLOG)
-	@make clean all AS_SECONDARY_BOOTLOADER=1 ENABLE_DEBUG=1 TESTBUILD=1 | tee -a $(BUILDLOG)
+	@make clean $(TESTBUILD_TARGETS) size $(UM2FW)-cardboot-firstinstall.lst AS_SECONDARY_BOOTLOADER=1 ENABLE_DEBUG=1 TESTBUILD=1 | tee -a $(BUILDLOG)
 	@mkdir -p testbuild_secondary_debug
-	@mv $(TARGET).hex $(TARGET).lst $(UM2FW)-cardboot-firstinstall.hex $(UM2FW)-cardboot-firstinstall.lst ./testbuild_secondary_debug/
+	@mv $(TESTBUILD_TARGETS) $(UM2FW)-cardboot-firstinstall.hex $(UM2FW)-cardboot-firstinstall.lst ./testbuild_secondary_debug/
 
-testbuildclean:
+cleantestbuild:
 	rm -rf testbuild_*
 
 ALL_UM2FW_HEX = $(wildcard $(UM2FW_DIR)/*.hex))
@@ -29,15 +31,20 @@ ifeq ($(AS_SECONDARY_BOOTLOADER),1)
 RELEASE_OPTS = AS_SECONDARY_BOOTLOADER=1
 endif
 
+RELEASE_DIR = release
+
 release: clean
 	@mkdir -p release
 	$(foreach var,$(ALL_UM2FW),make all $(RELEASE_OPTS) UM2FW_PATH="$(var)" ;)
-	$(foreach var,$(ALL_UM2FW_NEW),mv -f "$(var)-cardboot.hex" ./release/ ;)
-	$(foreach var,$(ALL_UM2FW_NEW),mv -f "$(var)-cardboot-firstinstall.hex" ./release/ ;)
-	$(foreach var,$(ALL_UM2FW_NEW),mv -f "$(var).APP.BIN" ./release/ ;)
+	$(foreach var,$(ALL_UM2FW_NEW),mv -f "$(var)-cardboot.hex" ./$(RELEASE_DIR)/ ;)
+ifeq ($(AS_SECONDARY_BOOTLOADER),1)
+	$(foreach var,$(ALL_UM2FW_NEW),mv -f "$(var)-cardboot-firstinstall.hex" ./$(RELEASE_DIR)/ ;)
+endif
+	$(foreach var,$(ALL_UM2FW_NEW),mv -f "$(var).APP.BIN" ./$(RELEASE_DIR)/ ;)
+	cp -f $(BOOTFW)_withspmfunc.hex ./$(RELEASE_DIR)/
 
 cleanrelease:
-	rm -rf release
+	rm -rf $(RELEASE_DIR)
 	rm -rf Marlin*.hex
 
 toolversion:

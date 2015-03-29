@@ -50,7 +50,6 @@ void dbg_init(void)
 
 	irq_enabled = bit_is_set(SREG, 7);
 
-	cli(); // not sure if primary bootloader activated interrupts
 	SER_PIN_DDRx |= _BV(SER_PIN_NUM); // TX pin as output
 	UBRRn = 16; // 115200 baud
 	UCSRnA = (1 << U2Xn);
